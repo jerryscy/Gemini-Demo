@@ -3,155 +3,397 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Live Translation · Gemini Live API</title>
+<title>Gemini Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0f1221;
-    --panel: #171a2e;
-    --panel-2: #1e2340;
-    --line: #2b3157;
-    --text: #e7e9f5;
-    --muted: #9aa0c7;
-    --in: #2563eb;
-    --out: #16a34a;
-    --accent: #7c3aed;
-    --danger: #dc2626;
+    --bg: #f8fafd;
+    --surface: #ffffff;
+    --surface-container: #f0f4f9;
+    --surface-variant: #e1e7f0;
+    --line: #dadce0;
+    --line-subtle: #edf0f7;
+    --text: #1f1f1f;
+    --text-secondary: #444746;
+    --muted: #5f6368;
+    --primary: #0b57d0;
+    --primary-hover: #0842a0;
+    --primary-container: #d3e3fd;
+    --primary-tint: #eef4ff;
+    --on-primary-container: #041e49;
+    --in: #1a73e8;
+    --out: #1e8e3e;
+    --danger: #b3261e;
+    --danger-hover: #8c1d18;
+    --warning: #f9ab00;
+    --shadow-sm: 0 1px 2px 0 rgba(60,64,67,0.1), 0 1px 3px 1px rgba(60,64,67,0.06);
+    --shadow-md: 0 2px 6px 2px rgba(60,64,67,0.12);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0; font-family: 'Google Sans', 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
     background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
   header {
-    padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-height: 56px;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .brand svg { display: block; flex-shrink: 0; }
+  header h1 {
+    font-size: 18px; margin: 0; font-weight: 500; color: var(--text);
+    letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px;
+  }
   .spacer { flex: 1; }
-  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
-  .dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
-  .dot.connecting { background: #eab308; }
+
+  /* Google Cloud style status chips */
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;
+    color: var(--text-secondary); background: var(--surface-container); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 16px;
+  }
+  .model-badge {
+    background: var(--primary-container); color: var(--on-primary-container); border: 1px solid #c2e7ff;
+    font-family: 'Roboto Mono', monospace; font-size: 11px; padding: 3px 8px; border-radius: 6px; font-weight: 500;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; }
+  .dot.connected { background: var(--out); box-shadow: 0 0 0 2px rgba(30,142,62,0.25); }
+  .dot.connecting { background: var(--warning); }
   .dot.error { background: var(--danger); }
-
-  .controls {
-    padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  .timer-badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
+    font-family: 'Roboto Mono', monospace; font-variant-numeric: tabular-nums;
+    color: var(--primary); background: var(--primary-container); border: 1px solid #c2e7ff;
+    padding: 4px 10px; border-radius: 16px; transition: all 0.2s ease;
   }
-  .field { display: flex; flex-direction: column; gap: 3px; }
-  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .timer-badge.warning {
+    color: var(--danger); background: #fce8e6; border-color: #fad2cf;
+  }
+
+  /* User profile display */
+  .user-display {
+    display: none; align-items: center; gap: 8px; font-size: 12px; font-weight: 500;
+    color: var(--text); background: var(--surface-container); border: 1px solid var(--line);
+    padding: 3px 10px 3px 6px; border-radius: 20px;
+  }
+  .user-avatar {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
+  }
+  .user-display .name { font-weight: 500; color: var(--text); }
+  .user-display a.logout-btn {
+    text-decoration: none; font-size: 11px; font-weight: 500; padding: 2px 6px;
+    background: transparent; border: none; color: var(--primary); transition: 0.15s;
+    border-radius: 4px;
+  }
+  .user-display a.logout-btn:hover { background: rgba(11, 87, 208, 0.08); }
+
+  /* Sub Tabs Bar (Google M3 Tabs) */
+  .subtabs-bar {
+    padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px;
+  }
+  .subtabs-label {
+    font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .subtabs {
+    display: flex; gap: 4px;
+  }
+  .tab-btn {
+    border: none; background: transparent; color: var(--text-secondary); padding: 12px 18px;
+    font-family: 'Google Sans', 'Roboto', sans-serif; font-size: 14px; font-weight: 500;
+    cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s ease;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--surface-container); border-radius: 8px 8px 0 0; }
+  .tab-btn.active {
+    color: var(--primary); font-weight: 600; border-bottom: 3px solid var(--primary);
+    background: transparent;
+  }
+
+  /* Configuration Section */
+  .config-section {
+    padding: 12px 20px 14px; background: var(--surface); border-bottom: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .config-header {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .config-title {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); display: flex; align-items: center; gap: 6px;
+  }
+  .config-grid {
+    display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label {
+    font-size: 11px; font-weight: 500; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: .04em;
+  }
   select {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 7px 10px; font-size: 13px; min-width: 190px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px; font-size: 13px; font-family: 'Roboto', sans-serif;
+    min-width: 180px; transition: border-color 0.2s, box-shadow 0.2s; outline: none;
   }
-  button {
-    border: none; border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 600;
-    cursor: pointer; color: #fff; background: var(--accent);
+  select:hover { border-color: #9aa0a6; }
+  select:focus {
+    border-color: var(--primary); box-shadow: 0 0 0 2px rgba(11, 87, 208, 0.2);
   }
-  button.rec { background: var(--in); }
-  button.rec.recording { background: var(--danger); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
 
-  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
-  .switch { position: relative; width: 42px; height: 24px; }
+  /* Start / Stop button (M3 Filled Pill) */
+  button {
+    border: none; border-radius: 20px; padding: 8px 20px; font-size: 13px; font-weight: 500;
+    cursor: pointer; color: #fff; background: var(--primary); font-family: 'Google Sans', sans-serif;
+    transition: all 0.2s ease; box-shadow: var(--shadow-sm); display: inline-flex; align-items: center;
+    gap: 6px; justify-content: center;
+  }
+  button:hover { background: var(--primary-hover); box-shadow: var(--shadow-md); }
+  button.rec { background: var(--primary); }
+  button.rec:hover { background: var(--primary-hover); }
+  button.rec.recording {
+    background: var(--danger); box-shadow: 0 1px 3px 0 rgba(179,38,30,0.4);
+    animation: pulse-red 2s infinite ease-in-out;
+  }
+  button.rec.recording:hover { background: var(--danger-hover); }
+  @keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(217, 48, 37, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(217, 48, 37, 0); }
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+
+  /* Multi-select language chips (M3 Assist Chips) */
+  .multi-select-wrap {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 540px; min-height: 35px;
+  }
+  .chips-container {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .chip {
+    background: var(--surface-container); border: 1px solid var(--line);
+    color: var(--text); font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 16px;
+    display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s;
+  }
+  .chip:hover { background: #e5ebf5; }
+  .chip .chip-name { font-weight: 500; }
+  .chip .chip-code { color: var(--muted); font-size: 10px; font-family: 'Roboto Mono', monospace; }
+  .chip-remove {
+    cursor: pointer; color: var(--muted); font-weight: bold; font-size: 14px; line-height: 1;
+    border-radius: 50%; padding: 0 2px; transition: color 0.15s;
+  }
+  .chip-remove:hover { color: var(--danger); }
+
+  .field.disabled {
+    opacity: 0.38; pointer-events: none; user-select: none;
+  }
+  .field.disabled select {
+    cursor: not-allowed;
+  }
+  .col.output.disabled-col {
+    opacity: 0.55;
+  }
+  .col.output.disabled-col .msgs::before {
+    content: "Live Transcription active — output translation disabled";
+    display: block; text-align: center; color: var(--muted); font-size: 12px;
+    padding: 30px 10px; font-style: italic; font-family: 'Google Sans', sans-serif;
+  }
+
+  /* M3 Switch Toggle */
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+  .toggle.disabled { opacity: 0.38; pointer-events: none; }
+  .switch { position: relative; width: 40px; height: 22px; }
   .switch input { display: none; }
   .slider {
-    position: absolute; inset: 0; background: #3a3f66; border-radius: 999px; transition: .2s;
+    position: absolute; inset: 0; background: #c4c7c5; border-radius: 999px; transition: .2s;
   }
   .slider::before {
-    content: ""; position: absolute; height: 18px; width: 18px; left: 3px; top: 3px;
-    background: #fff; border-radius: 50%; transition: .2s;
+    content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px;
+    background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
   }
-  .switch input:checked + .slider { background: var(--out); }
+  .switch input:checked + .slider { background: var(--primary); }
   .switch input:checked + .slider::before { transform: translateX(18px); }
   .switch input:disabled + .slider { opacity: .4; }
 
-  main { flex: 1; display: flex; min-height: 0; }
+  .others-wrap {
+    min-height: 35px; height: 35px; display: flex; align-items: center;
+  }
+  .action-wrap {
+    margin-left: auto; display: flex; align-items: flex-start; padding-top: 19px;
+  }
+
+  /* Chat Panels (Google Gemini Cards) */
+  main { flex: 1; display: flex; min-height: 0; background: var(--bg); }
   .chat-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .columns { flex: 1; display: flex; min-height: 0; }
-  .col { flex: 1; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); }
-  .col:last-child { border-right: none; }
+  .columns { flex: 1; display: flex; min-height: 0; gap: 14px; padding: 14px 20px; }
+  .col {
+    flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden;
+  }
   .col-head {
-    padding: 8px 14px; font-size: 12px; font-weight: 600; color: var(--muted);
-    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    border-bottom: 1px solid var(--line-subtle); display: flex; align-items: center; gap: 8px;
+    background: #fafbfc; font-family: 'Google Sans', sans-serif;
   }
   .col-head .badge { width: 8px; height: 8px; border-radius: 50%; }
   .col.input .badge { background: var(--in); }
   .col.output .badge { background: var(--out); }
-  .msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .msgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
   .bubble {
-    max-width: 92%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4;
-    background: var(--panel-2); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word;
+    max-width: 88%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word; font-family: 'Roboto', sans-serif;
   }
-  .col.input .bubble { align-self: flex-start; border-left: 3px solid var(--in); }
-  .col.output .bubble { align-self: flex-end; border-right: 3px solid var(--out); }
-  .bubble .meta { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
-  .bubble.pending { opacity: .8; }
+  .col.input .bubble {
+    align-self: flex-start; background: var(--surface-container);
+    border: 1px solid var(--line); color: var(--text);
+  }
+  .col.output .bubble {
+    align-self: flex-end; background: var(--primary-tint);
+    border: 1px solid #d3e3fd; color: #041e49;
+  }
+  .bubble .meta {
+    font-size: 11px; font-weight: 500; color: var(--muted); margin-bottom: 4px;
+    font-family: 'Google Sans', sans-serif;
+  }
+  .col.output .bubble .meta { color: var(--primary); font-weight: 600; }
+  .bubble.pending { opacity: .75; }
 
+  /* Raw Messages Console (Google Cloud Shell style) */
   .raw {
-    height: 200px; border-top: 1px solid var(--line); background: #0b0d18; display: flex; flex-direction: column;
+    height: 180px; border-top: 1px solid var(--line); background: #202124; display: flex; flex-direction: column;
+    transition: height 0.2s ease;
+  }
+  .raw.collapsed {
+    height: auto;
+  }
+  .raw.collapsed #rawLog {
+    display: none;
   }
   .raw-head {
-    padding: 6px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 10px;
+    padding: 6px 20px; font-size: 12px; font-weight: 500; color: #bdc1c6; background: #2d2f31;
+    border-bottom: 1px solid #3c4043; display: flex; align-items: center; gap: 10px;
+    font-family: 'Google Sans', sans-serif;
   }
-  .raw-head button { padding: 4px 10px; font-size: 11px; background: #2b3157; }
+  .raw-head button {
+    padding: 3px 12px; font-size: 11px; background: transparent; color: #8ab4f8;
+    border: 1px solid #5f6368; border-radius: 4px; box-shadow: none; cursor: pointer;
+  }
+  .raw-head button:hover { background: rgba(138, 180, 248, 0.08); border-color: #8ab4f8; }
   #rawLog {
-    flex: 1; overflow-y: auto; margin: 0; padding: 10px 14px; font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 12px; color: #a9e3c0; white-space: pre-wrap; word-break: break-all;
+    flex: 1; overflow-y: auto; margin: 0; padding: 10px 20px; font-family: 'Roboto Mono', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px; color: #a8dab5; white-space: pre-wrap; word-break: break-all;
   }
 </style>
 </head>
 <body>
   <header>
-    <h1>🎙️ Live Translation · Gemini Live API</h1>
-    <span id="modelName" class="status"></span>
+    <div class="brand">
+      <svg class="gemini-star" viewBox="0 0 24 24" width="22" height="22">
+        <defs>
+          <linearGradient id="geminiGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#4285f4"/>
+            <stop offset="40%" stop-color="#9b72cb"/>
+            <stop offset="100%" stop-color="#d96570"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#geminiGrad)" d="M12 2C12 7.52 7.52 12 2 12c5.52 0 10 4.48 10 10 0-5.52 4.48-10 10-10-5.52 0-10-4.48-10-10z"/>
+      </svg>
+      <h1>Gemini Demo</h1>
+    </div>
+    <span id="modelName" class="model-badge"></span>
     <div class="spacer"></div>
-    <div class="status"><span id="wsDot" class="dot"></span> Server</div>
-    <div class="status"><span id="apiDot" class="dot"></span> Live API</div>
+    <div id="userDisplay" class="user-display">
+      <div class="user-avatar" id="userInitial">U</div>
+      <span><strong id="userName" class="name"></strong></span>
+      <a href="/logout" class="logout-btn">Log out</a>
+    </div>
+    <div class="status-badge"><span id="wsDot" class="dot"></span> Server</div>
+    <div class="status-badge"><span id="apiDot" class="dot"></span> Live API</div>
+    <div id="timerBadge" class="timer-badge" style="display: none;" title="Active Live API session countdown">
+      <span>⏱️</span>
+      <span id="sessionTimer">10:00</span>
+    </div>
   </header>
 
-  <div class="controls">
-    <div class="field">
-      <label>Input language</label>
-      <select id="sourceLang"></select>
+  <!-- Function Sub-tabs -->
+  <nav class="subtabs-bar" aria-label="Function Selection">
+    <div class="subtabs-label">Function</div>
+    <div class="subtabs" role="tablist">
+      <button type="button" id="modeTranslateBtn" class="tab-btn active" role="tab" aria-selected="true" data-mode="translation" title="Speech-to-speech live translation">
+        🌐 Live Translation
+      </button>
+      <button type="button" id="modeTranscribeBtn" class="tab-btn" role="tab" aria-selected="false" data-mode="transcription" title="Real-time speech-to-text live transcription">
+        📝 Live Transcription
+      </button>
     </div>
-    <div class="field">
-      <label>Output language</label>
-      <select id="targetLang"></select>
+  </nav>
+
+  <!-- Configuration Section -->
+  <section class="config-section" aria-label="Configuration">
+    <div class="config-header">
+      <span class="config-title">⚙️ Configuration</span>
     </div>
+    <div class="config-grid">
+      <div class="field">
+        <label>Model</label>
+        <select id="modelSelect" style="min-width: 250px;"></select>
+      </div>
 
-    <button id="recBtn" class="rec">▶ Start</button>
+      <div class="field" id="sourceLangField">
+        <label id="sourceLangLabel">Input Languages (multi-select)</label>
+        <div class="multi-select-wrap">
+          <div id="sourceChips" class="chips-container"></div>
+          <select id="addSourceLangSelect" style="min-width: 140px;">
+            <option value="">+ Add language...</option>
+          </select>
+        </div>
+      </div>
 
-    <label class="toggle">
-      <span class="switch"><input type="checkbox" id="playToggle" checked><span class="slider"></span></span>
-      Play audio
-    </label>
+      <div class="field" id="targetLangField">
+        <label>Target Language</label>
+        <select id="targetLang"></select>
+      </div>
 
-    <label class="toggle" title="Toggle DeepFilterNet2 denoising in real time for A/B comparison">
-      <span class="switch"><input type="checkbox" id="denoiseToggle"><span class="slider"></span></span>
-      DeepFilterNet2 <span id="denoiseState" style="color:var(--muted);font-size:11px;"></span>
-    </label>
-  </div>
+      <div class="field" id="othersConfigField">
+        <label>Others Config</label>
+        <div class="others-wrap">
+          <label class="toggle" id="playAudioToggleLabel">
+            <span class="switch"><input type="checkbox" id="playToggle" checked><span class="slider"></span></span>
+            Play audio
+          </label>
+        </div>
+      </div>
+
+      <div class="action-wrap">
+        <button id="recBtn" class="rec">▶ Start</button>
+      </div>
+    </div>
+  </section>
 
   <main>
     <div class="chat-wrap">
       <div class="columns">
-        <section class="col input">
-          <div class="col-head"><span class="badge"></span> Input (transcription)</div>
+        <section class="col input" id="inputCol">
+          <div class="col-head"><span class="badge"></span> <span id="inputColTitle">Input (transcription)</span></div>
           <div id="inputMsgs" class="msgs"></div>
         </section>
-        <section class="col output">
+        <section class="col output" id="outputCol">
           <div class="col-head"><span class="badge"></span> Output (translation)</div>
           <div id="outputMsgs" class="msgs"></div>
         </section>
       </div>
 
-      <div class="raw">
+      <div class="raw collapsed">
         <div class="raw-head">
-          Raw messages (data return format)
+          <span>Raw messages (data return format)</span>
           <div class="spacer" style="flex:1"></div>
           <button id="clearRaw">Clear</button>
+          <button id="toggleRaw" title="Toggle raw messages panel">Show</button>
         </div>
         <pre id="rawLog"></pre>
       </div>
@@ -162,43 +404,241 @@
 const INPUT_SAMPLE_RATE = 16000;   // sent to Live API
 const OUTPUT_SAMPLE_RATE = 24000;  // received translated audio
 
+// Inline audio processor worklet code (avoids 404/MIME issues)
+const WORKLET_CODE = `
+class AudioProcessor extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.chunkSize = 1600; // 100ms at 16kHz
+        this.buffer = new Int16Array(this.chunkSize);
+        this.bufferIndex = 0;
+    }
+
+    process(inputs, outputs, parameters) {
+        const input = inputs[0];
+        if (input && input.length > 0) {
+            const channel = input[0];
+            for (let i = 0; i < channel.length; i++) {
+                let s = Math.max(-1, Math.min(1, channel[i]));
+                s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                this.buffer[this.bufferIndex++] = s;
+                if (this.bufferIndex >= this.chunkSize) {
+                    this.port.postMessage(this.buffer.buffer.slice(0), [this.buffer.buffer.slice(0)]);
+                    this.bufferIndex = 0;
+                }
+            }
+        }
+        return true;
+    }
+}
+registerProcessor('audio-processor', AudioProcessor);
+`;
+
 let ws = null;
 let audioCtx = null;         // capture context (16 kHz)
 let workletNode = null;
+let scriptNode = null;       // fallback processor
 let micStream = null;
 let recording = false;
 
 let playCtx = null;          // playback context (24 kHz)
 let playHead = 0;            // scheduling pointer for gapless playback
 
-// Track chat bubbles + accumulated text per (seq,type). The backend streams
-// only deltas; the frontend accumulates them for display and the raw panel.
+let currentMode = 'translation';
+let currentModel = '';
+let availableModes = [];
+let allModels = [];
+let allLanguages = [];
+const selectedSourceCodes = new Set();
+
+// Track chat bubbles + accumulated text per (seq,type).
 const bubbles = {};          // key `${seq}-${type}` -> element
-const acc = {};              // key `${seq}-${type}` -> accumulated string
+const acc = {};              // key `${seq}-${type}` -> accumulated/current string
 
 const $ = (id) => document.getElementById(id);
+
+// ---------------- Multi-language Chips ----------------
+function renderSourceChips() {
+  const container = $('sourceChips');
+  container.innerHTML = '';
+
+  selectedSourceCodes.forEach(code => {
+    const lang = allLanguages.find(l => l.code === code) || { name: code, code: code };
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'chip-name';
+    nameSpan.textContent = lang.name;
+
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'chip-code';
+    codeSpan.textContent = lang.code;
+
+    chip.appendChild(nameSpan);
+    chip.appendChild(codeSpan);
+
+    if (selectedSourceCodes.size > 1) {
+      const rm = document.createElement('span');
+      rm.className = 'chip-remove';
+      rm.innerHTML = '&times;';
+      rm.title = `Remove ${lang.name}`;
+      rm.onclick = (e) => {
+        e.stopPropagation();
+        selectedSourceCodes.delete(code);
+        renderSourceChips();
+        sendLanguages();
+      };
+      chip.appendChild(rm);
+    }
+    container.appendChild(chip);
+  });
+}
+
+// ---------------- Model Selector ----------------
+function populateModelSelect() {
+  const select = $('modelSelect');
+  select.innerHTML = '';
+
+  allModels.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    const tag = m.mode === 'translation' ? 'Translate' : 'Transcribe';
+    opt.textContent = `${m.name} [${tag}]`;
+    select.appendChild(opt);
+  });
+
+  if (currentModel) {
+    select.value = currentModel;
+  }
+}
+
+function selectModel(modelId, notifyServer = true) {
+  currentModel = modelId;
+  const select = $('modelSelect');
+  select.value = modelId;
+  $('modelName').textContent = modelId;
+
+  const found = allModels.find(m => m.id === modelId);
+  if (found && found.mode !== currentMode) {
+    setMode(found.mode, true, false);
+  }
+
+  if (notifyServer) {
+    send({ action: 'set_model', model: modelId });
+  }
+}
+
+// ---------------- Mode Selector ----------------
+function setMode(mode, fromServer = false, updateModel = true) {
+  currentMode = mode;
+  $('modeTranslateBtn').classList.toggle('active', mode === 'translation');
+  $('modeTranslateBtn').setAttribute('aria-selected', mode === 'translation' ? 'true' : 'false');
+  $('modeTranscribeBtn').classList.toggle('active', mode === 'transcription');
+  $('modeTranscribeBtn').setAttribute('aria-selected', mode === 'transcription' ? 'true' : 'false');
+
+  const isTranscribe = (mode === 'transcription');
+  const sourceField = $('sourceLangField');
+  const sourceLabel = $('sourceLangLabel');
+  const addSourceSelect = $('addSourceLangSelect');
+  const targetField = $('targetLangField');
+  const targetSelect = $('targetLang');
+  const playToggle = $('playToggle');
+  const playLabel = $('playAudioToggleLabel');
+  const othersField = $('othersConfigField');
+  const outputCol = $('outputCol');
+  const inputTitle = $('inputColTitle');
+
+  // Input languages: configurable in both Live Translation and Live Transcription
+  if (sourceField) {
+    sourceField.classList.remove('disabled');
+    sourceField.title = '';
+  }
+  if (addSourceSelect) {
+    addSourceSelect.disabled = false;
+  }
+  if (sourceLabel) {
+    sourceLabel.textContent = 'Input Languages (multi-select)';
+  }
+
+  // Disable target language selector when Live Transcription is selected
+  targetSelect.disabled = isTranscribe;
+  targetField.classList.toggle('disabled', isTranscribe);
+  targetField.title = isTranscribe ? 'Target language is disabled in Live Transcription mode' : '';
+
+  // Audio playback is for translation voice output
+  playToggle.disabled = isTranscribe;
+  playLabel.classList.toggle('disabled', isTranscribe);
+  if (othersField) {
+    othersField.classList.toggle('disabled', isTranscribe);
+    othersField.title = isTranscribe ? 'Audio playback is disabled in Live Transcription mode' : '';
+  }
+  outputCol.classList.toggle('disabled-col', isTranscribe);
+  inputTitle.textContent = isTranscribe ? 'Transcription (speech-to-text)' : 'Input (transcription)';
+
+  if (updateModel) {
+    // Select the recommended model for this mode
+    const defaultForMode = allModels.find(m => m.mode === mode);
+    if (defaultForMode) {
+      currentModel = defaultForMode.id;
+      $('modelSelect').value = currentModel;
+      $('modelName').textContent = currentModel;
+    }
+  }
+
+  if (!fromServer) {
+    send({ action: 'set_mode', mode: mode });
+  }
+}
 
 // ---------------- Config / dropdowns ----------------
 async function loadConfig() {
   const cfg = await (await fetch('/config')).json();
-  const src = $('sourceLang'), tgt = $('targetLang');
-  for (const lang of cfg.languages) {
+  allLanguages = cfg.languages || [];
+  availableModes = cfg.modes || [];
+  allModels = cfg.models || [];
+  currentModel = cfg.model || '';
+
+  const addSourceSelect = $('addSourceLangSelect');
+  const tgt = $('targetLang');
+  tgt.innerHTML = '';
+  addSourceSelect.innerHTML = '<option value="">+ Add language...</option>';
+
+  for (const lang of allLanguages) {
     const label = lang.name + (lang.preview ? '  (Preview)' : '') + ' — ' + lang.code;
-    src.add(new Option(label, lang.code));
+    addSourceSelect.add(new Option(label, lang.code));
     tgt.add(new Option(label, lang.code));
   }
-  src.value = cfg.default_source_code;
-  tgt.value = cfg.default_target_code;
 
-  $('modelName').textContent = cfg.model || '';
-
-  const dt = $('denoiseToggle');
-  if (!cfg.denoiser_available) {
-    dt.checked = false; dt.disabled = true;
-    $('denoiseState').textContent = '(unavailable)';
+  // Populate initial source language codes
+  selectedSourceCodes.clear();
+  if (cfg.default_source_codes && cfg.default_source_codes.length > 0) {
+    cfg.default_source_codes.forEach(c => selectedSourceCodes.add(c));
+  } else if (cfg.default_source_code) {
+    selectedSourceCodes.add(cfg.default_source_code);
   } else {
-    dt.checked = !!cfg.denoiser_enabled;
-    $('denoiseState').textContent = '(' + (cfg.denoiser_model || 'on') + ')';
+    selectedSourceCodes.add('zh-Hans');
+  }
+  renderSourceChips();
+
+  if (cfg.default_target_code) {
+    tgt.value = cfg.default_target_code;
+  }
+
+  populateModelSelect();
+  if (currentModel) {
+    $('modelSelect').value = currentModel;
+    $('modelName').textContent = currentModel;
+  }
+
+  setMode(cfg.mode || 'translation', true, false);
+
+  if (cfg.user_name) {
+    $('userName').textContent = cfg.user_name;
+    if ($('userInitial')) {
+      $('userInitial').textContent = cfg.user_name.charAt(0).toUpperCase();
+    }
+    $('userDisplay').style.display = 'flex';
   }
 }
 
@@ -210,19 +650,42 @@ function connectWS() {
 
   ws.onopen = () => {
     setDot('wsDot', 'connected');
-    // Tell the backend the current playback state so it only streams audio when wanted.
     send({ action: 'set_audio_output', enabled: $('playToggle').checked });
+    sendLanguages();
   };
-  ws.onclose = () => { setDot('wsDot', ''); setDot('apiDot', ''); setTimeout(connectWS, 2000); };
+  ws.onclose = () => { 
+    setDot('wsDot', ''); 
+    setDot('apiDot', ''); 
+    stopCountdown();
+    setTimeout(connectWS, 2000); 
+  };
   ws.onerror = () => setDot('wsDot', 'error');
 
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) { playAudio(ev.data); return; }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.kind === 'data') { handleData(msg.data); }
-    else if (msg.kind === 'status' && msg.live_api_status) {
+    if (msg.kind === 'data') {
+      handleData(msg.data);
+    } else if (msg.kind === 'model_updated') {
+      currentModel = msg.model;
+      $('modelSelect').value = msg.model;
+      $('modelName').textContent = msg.model;
+      if (msg.mode) setMode(msg.mode, true, false);
+    } else if (msg.kind === 'mode_updated') {
+      currentModel = msg.model;
+      $('modelSelect').value = msg.model;
+      $('modelName').textContent = msg.model;
+      setMode(msg.mode, true, false);
+    } else if (msg.kind === 'languages_updated') {
+      appendRaw(`languages_updated: sources=[${(msg.source_language_codes || []).join(', ')}], target=${msg.target_language} [${msg.target_language_code}]`);
+    } else if (msg.kind === 'status' && msg.live_api_status) {
       setDot('apiDot', msg.live_api_status.state);
+      if (msg.live_api_status.state === 'connected') {
+        startCountdown();
+      } else {
+        stopCountdown();
+      }
     }
   };
 }
@@ -232,22 +695,77 @@ function setDot(id, state) {
   el.className = 'dot' + (state ? ' ' + state : '');
 }
 
+// ---------------- 10-minute Live API Session Countdown Timer ----------------
+let countdownInterval = null;
+let remainingSeconds = 10 * 60; // 10 minutes
+
+function updateTimerDisplay() {
+  const mins = Math.floor(remainingSeconds / 60);
+  const secs = remainingSeconds % 60;
+  const timerEl = $('sessionTimer');
+  const badgeEl = $('timerBadge');
+  if (timerEl) {
+    timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  if (badgeEl) {
+    if (remainingSeconds <= 60) {
+      badgeEl.classList.add('warning');
+    } else {
+      badgeEl.classList.remove('warning');
+    }
+  }
+}
+
+function startCountdown() {
+  if (countdownInterval) return; // already active
+  remainingSeconds = 10 * 60;
+  updateTimerDisplay();
+  const badgeEl = $('timerBadge');
+  if (badgeEl) badgeEl.style.display = 'inline-flex';
+
+  countdownInterval = setInterval(() => {
+    remainingSeconds--;
+    if (remainingSeconds <= 0) {
+      remainingSeconds = 0;
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+    updateTimerDisplay();
+  }, 1000);
+}
+
+function stopCountdown() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  remainingSeconds = 10 * 60;
+  updateTimerDisplay();
+  const badgeEl = $('timerBadge');
+  if (badgeEl) badgeEl.style.display = 'none';
+}
+
 // ---------------- Data-contract handling ----------------
 function handleData(d) {
   const key = `${d.seq}-${d.type}`;
   const finished = (d.finished === true || d.finished === 'true');
 
-  // Accumulate the delta into the full message for this (seq,type).
-  const text = (acc[key] || '') + (d.delta || '');
+  let text;
+  if (d.text !== undefined) {
+    text = d.text;
+  } else {
+    text = (acc[key] || '') + (d.delta || '');
+  }
   acc[key] = text;
 
-  // Raw panel — show the documented data format (accumulated `message`).
   appendRaw('data:' + JSON.stringify({
     uid: d.uid, seq: d.seq, type: d.type, message: text, finished: finished
   }));
 
-  // Don't create an empty bubble for a bare finished-marker with no text.
-  if (!text && finished) return;
+  if (!text && finished) {
+    if (bubbles[key]) bubbles[key].classList.remove('pending');
+    return;
+  }
 
   const container = d.type === 1 ? $('inputMsgs') : $('outputMsgs');
   let el = bubbles[key];
@@ -256,7 +774,9 @@ function handleData(d) {
     el.className = 'bubble pending';
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `seq ${d.seq} · ${d.type === 1 ? 'input' : 'translation'}`;
+    meta.textContent = d.type === 1 
+      ? `seq ${d.seq} · ${currentMode === 'transcription' ? 'Transcript' : 'You (Input)'}` 
+      : `seq ${d.seq} · ✦ Gemini Translation`;
     const body = document.createElement('div');
     body.className = 'body';
     el.appendChild(meta); el.appendChild(body);
@@ -270,25 +790,53 @@ function handleData(d) {
 
 function appendRaw(line) {
   const log = $('rawLog');
-  log.textContent += line + '\n';
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, '0');
+  const m = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  log.textContent += `[${h}:${m}:${s}.${ms}] ${line}\n`;
   log.scrollTop = log.scrollHeight;
 }
 
 // ---------------- Audio playback (24 kHz PCM) ----------------
+const JITTER_BUFFER_SEC = 0.12; // 120ms lookahead cushion to eliminate network jitter / micro-stutters
+
 function playAudio(buffer) {
-  if (!$('playToggle').checked) return;   // audio-output toggle
-  if (!playCtx) playCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const int16 = new Int16Array(buffer);
-  if (int16.length === 0) return;
-  const f32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768;
-  const audioBuffer = playCtx.createBuffer(1, f32.length, OUTPUT_SAMPLE_RATE);
+  if (currentMode === 'transcription') return; // no audio in transcription mode
+  if (!$('playToggle').checked) return;       // audio-output toggle
+  if (!playCtx) {
+    playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (playCtx.state === 'suspended') {
+    playCtx.resume();
+  }
+
+  const sampleCount = Math.floor(buffer.byteLength / 2);
+  if (sampleCount === 0) return;
+
+  const int16 = new Int16Array(buffer, 0, sampleCount);
+  const f32 = new Float32Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    f32[i] = int16[i] / 32768;
+  }
+
+  const audioBuffer = playCtx.createBuffer(1, sampleCount, OUTPUT_SAMPLE_RATE);
   audioBuffer.getChannelData(0).set(f32);
+
   const src = playCtx.createBufferSource();
   src.buffer = audioBuffer;
   src.connect(playCtx.destination);
+
   const now = playCtx.currentTime;
-  if (playHead < now) playHead = now;
+  // If the audio buffer underran or this is the start of an utterance, add jitter cushion
+  if (playHead < now) {
+    playHead = now + JITTER_BUFFER_SEC;
+  } else if (playHead - now > 0.6) {
+    // Prevent latency drift if packets arrived faster than real-time
+    playHead = now + 0.25;
+  }
+
   src.start(playHead);
   playHead += audioBuffer.duration;
 }
@@ -299,15 +847,70 @@ async function startRecording() {
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   });
   audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
-  await audioCtx.audioWorklet.addModule('/static/audio-processor.js');
-  const source = audioCtx.createMediaStreamSource(micStream);
-  workletNode = new AudioWorkletNode(audioCtx, 'audio-processor');
-  workletNode.port.onmessage = (e) => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
-  };
-  source.connect(workletNode);
-  workletNode.connect(audioCtx.destination);
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
 
+  // Ensure playback context is unlocked on this user gesture
+  if (!playCtx) {
+    playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (playCtx.state === 'suspended') {
+    await playCtx.resume();
+  }
+  playHead = 0;
+
+  const source = audioCtx.createMediaStreamSource(micStream);
+  let streamingActive = false;
+
+  // Try AudioWorklet first
+  if (audioCtx.audioWorklet) {
+    try {
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      try {
+        await audioCtx.audioWorklet.addModule(blobUrl);
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+      workletNode = new AudioWorkletNode(audioCtx, 'audio-processor');
+      workletNode.port.onmessage = (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+      };
+      source.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
+      streamingActive = true;
+    } catch (workletErr) {
+      console.warn('AudioWorklet initialization failed, falling back to ScriptProcessor:', workletErr);
+      if (workletNode) {
+        try { workletNode.disconnect(); } catch (_) {}
+        workletNode = null;
+      }
+      streamingActive = false;
+    }
+  }
+
+  // Universal fallback if AudioWorklet failed or isn't supported
+  if (!streamingActive) {
+    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    scriptNode.onaudioprocess = (e) => {
+      const channel = e.inputBuffer.getChannelData(0);
+      const pcmData = new Int16Array(channel.length);
+      for (let i = 0; i < channel.length; i++) {
+        let s = Math.max(-1, Math.min(1, channel[i]));
+        s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        pcmData[i] = s;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(pcmData.buffer);
+      }
+    };
+    source.connect(scriptNode);
+    scriptNode.connect(audioCtx.destination);
+    streamingActive = true;
+  }
+
+  sendLanguages();
   send({ action: 'start_session' });
   recording = true;
   const btn = $('recBtn');
@@ -317,6 +920,7 @@ async function startRecording() {
 function stopRecording() {
   send({ action: 'stop_session' });
   if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
   recording = false;
@@ -338,23 +942,52 @@ $('recBtn').onclick = async () => {
 };
 
 function sendLanguages() {
-  const s = $('sourceLang'), t = $('targetLang');
+  const codes = Array.from(selectedSourceCodes);
+  const primaryCode = codes[0] || 'zh-Hans';
+  const primaryLang = allLanguages.find(l => l.code === primaryCode);
+  const t = $('targetLang');
+  const targetCode = t.value;
+  const targetObj = allLanguages.find(l => l.code === targetCode);
+  const targetName = targetObj ? targetObj.name : (t.options[t.selectedIndex] ? t.options[t.selectedIndex].text : targetCode);
+
   send({
-    source_language: s.options[s.selectedIndex].text,
-    source_language_code: s.value,
-    target_language: t.options[t.selectedIndex].text,
-    target_language_code: t.value,
+    source_language: primaryLang ? primaryLang.name : primaryCode,
+    source_language_code: primaryCode,
+    source_language_codes: codes,
+    target_language: targetName,
+    target_language_code: targetCode,
   });
 }
-$('sourceLang').onchange = sendLanguages;
+
+$('addSourceLangSelect').onchange = (e) => {
+  const code = e.target.value;
+  if (code) {
+    selectedSourceCodes.add(code);
+    renderSourceChips();
+    sendLanguages();
+    e.target.value = '';
+  }
+};
+
 $('targetLang').onchange = sendLanguages;
 
-$('denoiseToggle').onchange = (e) => send({ action: 'set_denoiser', enabled: e.target.checked });
+$('modelSelect').onchange = (e) => {
+  selectModel(e.target.value, true);
+};
+
+$('modeTranslateBtn').onclick = () => setMode('translation');
+$('modeTranscribeBtn').onclick = () => setMode('transcription');
+
 $('playToggle').onchange = (e) => {
   send({ action: 'set_audio_output', enabled: e.target.checked });
-  if (!e.target.checked) playHead = 0;  // drop any queued playback when muting
+  if (!e.target.checked) playHead = 0;
 };
 $('clearRaw').onclick = () => { $('rawLog').textContent = ''; };
+$('toggleRaw').onclick = () => {
+  const rawPanel = document.querySelector('.raw');
+  const isCollapsed = rawPanel.classList.toggle('collapsed');
+  $('toggleRaw').textContent = isCollapsed ? 'Show' : 'Hidden';
+};
 
 // ---------------- Boot ----------------
 (async () => { await loadConfig(); connectWS(); })();

@@ -1,86 +1,122 @@
-# Running the Live Translation app
+# Running the Gemini Live Application
 
-This app runs as **two processes** because of a hard dependency conflict on this
-machine:
+This application runs as a **single-process** FastAPI + WebSocket service powered by Google's **Gemini 3.5 Live API** (`google-genai` SDK with `enterprise=True` on Vertex AI).
 
-| Process | Interpreter | Why |
-|---|---|---|
-| **Main app** (`main.py`) | Python 3.14 (`.venv-app`) | latest `google-genai` (2.10.0) needs Python ≥3.10; gives proper word-by-word streaming + language hints |
-| **Denoiser sidecar** (`denoiser_service.py`) | Python 3.9 (`.venv`) | DeepFilterNet's native lib only builds for CPython 3.8–3.11 and needs numpy<2 |
+| Component | Technology | Description | Port |
+|---|---|---|---|
+| **Web Service & Worker** | Python ≥3.10 (`.venv-app`) | FastAPI, WebSockets, `google-genai` SDK | `8000` |
+| **Frontend** | Vanilla JS / Web Audio | AudioWorklet capture (16 kHz) & 24 kHz playback | — |
 
-The main app streams mic audio to the sidecar over a local WebSocket **only when
-the DeepFilterNet2 toggle is ON** (zero overhead when off).
+---
 
-## 1. Authenticate to Google Cloud (required)
+## 1. Authenticate to Google Cloud (Required)
+
+Ensure your gcloud CLI is authenticated with Application Default Credentials:
+
 ```bash
 gcloud auth application-default login
 ```
-Project/region come from `.env` (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`).
 
-## 2. One-time environment setup
-Both venvs already exist. To rebuild them (note the PyPI index override — a global
-pip.conf otherwise points pip at a private registry):
+Set your GCP project ID and region in `.env`.
+> **Note**: Both `gemini-3.5-live-translate-preview` and `gemini-3.5-transcribe-live-preview` require `GOOGLE_CLOUD_LOCATION="global"`.
+
+---
+
+## 2. Environment Setup
+
+Create and activate a Python virtual environment (Python ≥3.10):
 
 ```bash
-# Main app (Python 3.14)
-/opt/homebrew/bin/python3.14 -m venv .venv-app
+python3 -m venv .venv-app
 ./.venv-app/bin/pip install --index-url https://pypi.org/simple -r requirements.txt
-
-# Denoiser sidecar (Python 3.9)
-/usr/bin/python3 -m venv .venv
-./.venv/bin/pip install --index-url https://pypi.org/simple -r requirements-denoiser.txt
 ```
 
-## 3. Start everything
-Just start the app — it **auto-starts the denoiser sidecar** for you:
+Copy the example environment configuration:
+
 ```bash
-./.venv-app/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+cp .env.example .env
 ```
-The app spawns `denoiser_service.py` on the Python 3.9 venv, waits for the model
-to load, and stops it on exit. If the sidecar can't start, the app still runs and
-audio simply passes through undenoised (the UI shows the denoiser as unavailable).
 
-Prefer to manage them yourself? Set `AUTO_START_DENOISER=false` in `.env` and run:
+Ensure `.env` contains:
+```env
+GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+GOOGLE_CLOUD_LOCATION="global"
+TRANSLATION_MODEL_ID="gemini-3.5-live-translate-preview"
+TRANSCRIPTION_MODEL_ID="gemini-3.5-transcribe-live-preview"
+DEFAULT_MODE="translation"
+DEFAULT_SOURCE_LANG="Chinese (Simplified)"
+DEFAULT_SOURCE_LANG_CODE="zh-Hans"
+DEFAULT_TARGET_LANG="English"
+DEFAULT_TARGET_LANG_CODE="en"
+IDLE_CLOSE_SECONDS="30"
+DEBUG_LIVE_API="false"
+```
+
+---
+
+## 3. Start the Application
+
+Start the server using `run.sh` or directly with uvicorn:
+
 ```bash
 ./run.sh
-# or, in two terminals:
-./.venv/bin/python denoiser_service.py
+```
+
+Or:
+
+```bash
 ./.venv-app/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-> Tip: if a previous run left something on port 8000/8600, free it with:
-> `for p in 8000 8600; do kill -9 $(lsof -tiTCP:$p) 2>/dev/null; done`
+> **Tip**: If port 8000 is occupied, free it with:
+> `kill -9 $(lsof -tiTCP:8000) 2>/dev/null || true`
 
-## 4. Use it
-Open http://127.0.0.1:8000 in Chrome/Edge:
-- **Input / Output** dropdowns (Chirp 3 HD list; defaults cmn-CN → en-US).
-- **▶ Start** → allow mic. Left = input transcription (type 1), right = translation (type 2).
-- **Raw messages** panel shows the exact `data:{...}` records.
-- **Play audio** toggle controls translated-speech playback.
-- **DeepFilterNet2** toggle turns denoising on/off in real time for A/B comparison.
+---
 
-## Data contract (WebSocket text frame `{"kind":"data","data":{...}}`)
+## 4. Using the Web Interface
+
+Open **`http://127.0.0.1:8000`** in your browser (Chrome or Edge recommended):
+
+1. **Mode Selector**:
+   - **Live Translation** (`gemini-3.5-live-translate-preview`): Translates spoken audio to the chosen target language with real-time text and synthesized 24 kHz voice audio.
+   - **Live Transcription** (`gemini-3.5-transcribe-live-preview`): Real-time speech-to-text transcription. Target language selection and audio output are automatically disabled in this mode.
+2. **Language Configuration**:
+   - Select one or multiple input languages (e.g. `zh-Hans`, `en`).
+   - Select target output language (78 supported BCP-47 standard languages).
+3. **Recording & Audio**:
+   - Click **▶ Start** and grant microphone permissions.
+   - Left column displays source speech transcription (type 1).
+   - Right column displays translated text (type 2).
+   - The **Play audio** toggle enables/disables real-time translated voice playback.
+
+---
+
+## 5. Data Contract (`ws://127.0.0.1:8000/ws`)
+
+### Text Messages (`{"kind": "data", "data": {...}}`)
+```json
+{
+  "uid": "uuid-string",
+  "seq": 1,
+  "type": 1,
+  "delta": "Partial transcript chunk",
+  "finished": false
+}
 ```
-uid      client session id (new when a browser tab connects)
-seq      turn sequence; increments on each turnComplete; accumulates across
-         pauses and Start/Stop for the life of the connection
-type     1 = input transcription, 2 = translation
-message  accumulated text for the current turn
-finished false while turnComplete is false, true when it is true
-```
+- `uid`: Unique client session ID generated per browser connection.
+- `seq`: Turn sequence counter that increments on turn completion.
+- `type`: `1` for source input transcript, `2` for translation.
+- `delta` / `text`: Incremental text chunk or cumulative transcript string.
+- `finished`: `false` while streaming, `true` when turn is complete.
 
-## Stop / Start behaviour
-Pressing **Stop** pauses the audio but keeps the Live API session open, so
-pressing **Start** again resumes **instantly and reliably** (no reconnect). If
-you stay stopped longer than `IDLE_CLOSE_SECONDS` (default 30s, in `.env`) the
-session closes to avoid holding a billable session open; the next Start
-reconnects. This avoids the intermittent "no translation after restart" that a
-fresh reconnect on every Stop→Start could cause.
+### Binary Messages
+- **Client $\rightarrow$ Server**: 16 kHz 16-bit linear PCM microphone chunks (~100ms).
+- **Server $\rightarrow$ Client**: 24 kHz 16-bit linear PCM translated audio chunks.
 
-## Diagnostics
-Set `DEBUG_LIVE_API=true` in `.env` to log raw Live API transcription timing.
-`diagnose.py` streams a Mandarin WAV through the real worker and prints event
-timing (needs ADC):
-```bash
-./.venv-app/bin/python diagnose.py /tmp/test_cmn.wav
-```
+---
+
+## 6. Session Lifecycle & Keep-Alive
+
+- Clicking **Stop** pauses audio transmission but retains the Live API session in an idle state.
+- Clicking **Start** within `IDLE_CLOSE_SECONDS` (default: 30s) resumes streaming instantly without reconnecting.
+- If idle beyond `IDLE_CLOSE_SECONDS`, the session is cleanly closed to prevent unnecessary billing, and the next **Start** automatically reconnects.

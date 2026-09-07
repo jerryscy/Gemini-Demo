@@ -4,8 +4,11 @@
 #   /opt/homebrew/bin/python3.14 -m venv .venv-app
 #   ./.venv-app/bin/pip install --index-url https://pypi.org/simple -r requirements.txt
 # ---------------------------------------------------------------------------
-google-genai==2.10.0          # latest SDK; needs Python >= 3.10
+google-genai>=2.22.0         # latest SDK; needs Python >= 3.10
 fastapi
 uvicorn[standard]
 python-dotenv
-websockets                    # WS server (browser) + client (denoiser sidecar)
+websockets                    # WebSocket communication
+httpx                         # Async client for Google OAuth userinfo API
+itsdangerous                  # Required for Starlette's SessionMiddleware
+

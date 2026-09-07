@@ -18,10 +18,10 @@ __pycache__/
 
 # Logs & scratch
 *.log
-diagnose_*.log
 
 # Audio scratch files
 *.wav
+*.aiff
 
 # IDE / editor
 .vscode/

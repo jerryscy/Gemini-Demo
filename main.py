@@ -1,83 +1,34 @@
 import os
 import asyncio
 import json
-import socket
 import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
+import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, status
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+
 
 from liveapiworker import LiveAPIWorker
-from denoiser_client import DenoiserClient
 from languages import languages_json, name_for_code
 
 load_dotenv(override=True)  # .env wins over inherited env (e.g. GOOGLE_CLOUD_LOCATION=global)
 
 # --- Configuration (all overridable via .env) ---
-DEFAULT_SOURCE_LANG_CODE = os.getenv("DEFAULT_SOURCE_LANG_CODE", "cmn-CN")
-DEFAULT_TARGET_LANG_CODE = os.getenv("DEFAULT_TARGET_LANG_CODE", "en-US")
+DEFAULT_SOURCE_LANG_CODE = os.getenv("DEFAULT_SOURCE_LANG_CODE", "zh-Hans")
+DEFAULT_TARGET_LANG_CODE = os.getenv("DEFAULT_TARGET_LANG_CODE", "en")
 DEFAULT_SOURCE_LANG = os.getenv("DEFAULT_SOURCE_LANG") or name_for_code(DEFAULT_SOURCE_LANG_CODE)
 DEFAULT_TARGET_LANG = os.getenv("DEFAULT_TARGET_LANG") or name_for_code(DEFAULT_TARGET_LANG_CODE)
 
-DENOISER_MODEL = os.getenv("DENOISER_MODEL", "DeepFilterNet2")
-DENOISER_DEFAULT_ON = os.getenv("DENOISER_DEFAULT_ON", "true").lower() in ("1", "true", "yes", "on")
-DENOISER_URL = os.getenv("DENOISER_URL", "ws://127.0.0.1:8600")
-# Auto-start the denoiser sidecar (Python 3.9) as a subprocess so a plain
-# `uvicorn main:app` works without needing run.sh. Set to false to manage it
-# yourself (e.g. via run.sh).
-AUTO_START_DENOISER = os.getenv("AUTO_START_DENOISER", "true").lower() in ("1", "true", "yes", "on")
-APP_DIR = Path(__file__).resolve().parent
-# Interpreter for the sidecar (the Python 3.9 venv with deepfilternet).
-DENOISER_PYTHON = os.getenv("DENOISER_PYTHON", str(APP_DIR / ".venv" / "bin" / "python"))
-
-
 liveapiworker: Optional[LiveAPIWorker] = None
-denoiser: Optional[DenoiserClient] = None
 _worker_task: Optional[asyncio.Task] = None
-_denoiser_proc: Optional[subprocess.Popen] = None
-
-
-def _port_is_open(url: str) -> bool:
-    """Return True if something is already listening at the sidecar URL."""
-    parsed = urlparse(url)
-    host, port = parsed.hostname or "127.0.0.1", parsed.port or 8600
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.4)
-        return s.connect_ex((host, port)) == 0
-
-
-def _denoiser_expected_available() -> bool:
-    """True if the denoiser is connected or expected to be (sidecar spawned)."""
-    if bool(getattr(denoiser, "available", False)):
-        return True
-    # We spawned it (still loading) — it will connect lazily when toggled on.
-    return _denoiser_proc is not None and _denoiser_proc.poll() is None
-
-
-def _maybe_spawn_denoiser() -> Optional[subprocess.Popen]:
-    """Start the denoiser sidecar subprocess if it isn't already running."""
-    if not AUTO_START_DENOISER:
-        return None
-    if _port_is_open(DENOISER_URL):
-        print("[startup] Denoiser sidecar already running.")
-        return None
-    if not Path(DENOISER_PYTHON).exists():
-        print(f"[startup] Denoiser interpreter not found at {DENOISER_PYTHON}; "
-              "skipping auto-start (audio will pass through undenoised).")
-        return None
-    print(f"[startup] Launching denoiser sidecar: {DENOISER_PYTHON} denoiser_service.py")
-    return subprocess.Popen(
-        [DENOISER_PYTHON, "denoiser_service.py"],
-        cwd=str(APP_DIR),
-    )
 
 
 def check_gcloud_auth() -> bool:
@@ -105,68 +56,186 @@ def check_gcloud_auth() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
-    global liveapiworker, denoiser, _worker_task, _denoiser_proc
+    global liveapiworker, _worker_task
     check_gcloud_auth()
-
-    # Auto-start the DeepFilterNet denoiser sidecar (separate Python 3.9
-    # process), then connect to it. If it can't be started/reached the app
-    # still works — audio just isn't denoised and the UI shows it unavailable.
-    _denoiser_proc = _maybe_spawn_denoiser()
-    denoiser = DenoiserClient(url=DENOISER_URL, enabled=DENOISER_DEFAULT_ON)
-
-    # Probe in the BACKGROUND so app startup is instant (the sidecar takes a few
-    # seconds to load its model, and it's off by default anyway). The client
-    # also connects lazily the moment the denoiser is toggled on.
-    async def _probe_denoiser_bg():
-        for _ in range(30):
-            try:
-                if await denoiser.probe():
-                    return
-            except Exception:
-                pass
-            await asyncio.sleep(1.0)
-    asyncio.create_task(_probe_denoiser_bg())
 
     liveapiworker = LiveAPIWorker(
         DEFAULT_SOURCE_LANG,
         DEFAULT_TARGET_LANG,
         source_language_code=DEFAULT_SOURCE_LANG_CODE,
         target_language_code=DEFAULT_TARGET_LANG_CODE,
-        denoiser=denoiser,
     )
 
+    def _on_worker_done(t):
+        if not t.cancelled() and t.exception():
+            print(f"[main] CRITICAL: Live API worker crashed: {t.exception()}")
+
     _worker_task = asyncio.create_task(liveapiworker.run(), name="live-api-worker")
+    _worker_task.add_done_callback(_on_worker_done)
     yield
     # Graceful shutdown: cancel the background worker task.
     if _worker_task and not _worker_task.done():
         _worker_task.cancel()
         await asyncio.gather(_worker_task, return_exceptions=True)
-    # Stop the denoiser sidecar if we started it.
-    if _denoiser_proc is not None:
-        print("[shutdown] Stopping denoiser sidecar...")
-        _denoiser_proc.terminate()
-        try:
-            _denoiser_proc.wait(timeout=5)
-        except Exception:
-            _denoiser_proc.kill()
 
 
 app = FastAPI(lifespan=lifespan)
+
+# --- Google OAuth 2.0 & Session Configuration ---
+ENABLE_OAUTH = os.getenv("ENABLE_OAUTH", "false").lower() in ("1", "true", "yes", "on")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-this-to-a-very-secure-random-key-in-prod-123456")
+ALLOWED_EMAILS = [
+    email.strip().lower()
+    for email in os.getenv("ALLOWED_EMAILS", "jerryscy@gmail.com").split(",")
+    if email.strip()
+]
+
+# Enable Starlette's SessionMiddleware for managing signed session cookies (needed only if OAuth is enabled)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY, max_age=86400 * 7) # 7 days session
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/audio-processor.js")
+async def get_audio_processor():
+    """Direct route for the audio worklet with guaranteed JS MIME type."""
+    return FileResponse("static/audio-processor.js", media_type="application/javascript")
+
+
+@app.get("/login")
+async def login(request: Request):
+    """Redirect to Google's OAuth 2.0 Consent Screen."""
+    if not ENABLE_OAUTH:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    redirect_uri = f"{request.url.scheme}://{request.headers.get('host')}/callback"
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?response_type=code"
+        f"&client_id={GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope=openid%20email"
+        f"&state=auth-state"
+    )
+    return RedirectResponse(url=auth_url)
+
+
+@app.get("/callback")
+async def callback(request: Request, code: Optional[str] = None, error: Optional[str] = None):
+    """Handle Google OAuth 2.0 callback, exchange code, verify email, and set session."""
+    if not ENABLE_OAUTH:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    if error or not code:
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error or 'missing authorization code'}")
+    
+    redirect_uri = f"{request.url.scheme}://{request.headers.get('host')}/callback"
+    
+    async with httpx.AsyncClient() as client:
+        # Exchange authorization code for an access token
+        token_res = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            }
+        )
+        if token_res.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch OAuth token: {token_res.text}")
+        
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        
+        # Fetch user profile using the access token
+        user_res = await client.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        if user_res.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch user info: {user_res.text}")
+            
+        user_info = user_res.json()
+        email = user_info.get("email", "").strip().lower()
+        
+        # Restrict login to authorized test users
+        if not email or email not in ALLOWED_EMAILS:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied: {email} is not authorized for this application."
+            )
+        
+        # Store identity in session
+        request.session["email"] = email
+        request.session["user_name"] = user_info.get("name", "User")
+        
+    return RedirectResponse(url="/")
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    """Clear session cookies and redirect to home."""
+    if not ENABLE_OAUTH:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    request.session.clear()
+    return RedirectResponse(url="/")
 
 
 @app.get("/config")
-async def get_config():
-    """Expose language list + defaults + denoiser state to the frontend."""
+async def get_config(request: Request):
+    """Expose language list + defaults + mode + model state to the frontend."""
+    if ENABLE_OAUTH:
+        email = request.session.get("email")
+        if not email or email not in ALLOWED_EMAILS:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        user_name = request.session.get("user_name", "User")
+    else:
+        user_name = None
+
+    current_mode = liveapiworker.mode if liveapiworker else "translation"
+    current_model = liveapiworker.model_id if liveapiworker else LiveAPIWorker.TRANSLATION_MODEL_ID
+    source_codes = liveapiworker.source_language_codes if liveapiworker else [DEFAULT_SOURCE_LANG_CODE]
+
+    available_models = [
+        {
+            "id": LiveAPIWorker.TRANSLATION_MODEL_ID,
+            "name": "Gemini 3.5 Live Translate (Preview)",
+            "mode": "translation",
+            "description": "Real-time speech-to-speech translation (Preview)",
+        },
+        {
+            "id": LiveAPIWorker.TRANSCRIPTION_MODEL_ID,
+            "name": "Gemini 3.5 Live Transcribe (Preview)",
+            "mode": "transcription",
+            "description": "Real-time speech-to-text transcription (Preview)",
+        },
+    ]
+
     return JSONResponse(
         {
             "languages": languages_json(),
             "default_source_code": DEFAULT_SOURCE_LANG_CODE,
+            "default_source_codes": source_codes,
             "default_target_code": DEFAULT_TARGET_LANG_CODE,
-            "denoiser_available": _denoiser_expected_available(),
-            "denoiser_enabled": bool(getattr(denoiser, "enabled", False)) and _denoiser_expected_available(),
-            "denoiser_model": DENOISER_MODEL,
-            "model": LiveAPIWorker.MODEL_ID,
+            "mode": current_mode,
+            "modes": [
+                {
+                    "id": "translation",
+                    "name": "Live Translation",
+                    "model": LiveAPIWorker.TRANSLATION_MODEL_ID,
+                    "description": "Real-time speech-to-speech translation",
+                },
+                {
+                    "id": "transcription",
+                    "name": "Live Transcription",
+                    "model": LiveAPIWorker.TRANSCRIPTION_MODEL_ID,
+                    "description": "Real-time speech-to-text transcription",
+                },
+            ],
+            "model": current_model,
+            "models": available_models,
+            "user_name": user_name,
         }
     )
 
@@ -205,12 +274,28 @@ async def _stream_events_to_client(websocket: WebSocket) -> None:
 
 
 @app.get("/")
-async def get():
-    return FileResponse("static/index.html")
+async def get(request: Request):
+    """Serve the index page."""
+    if ENABLE_OAUTH:
+        email = request.session.get("email")
+        if not email or email not in ALLOWED_EMAILS:
+            return RedirectResponse(url="/login")
+    return FileResponse(
+        "static/index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    )
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Retrieve the user's session and verify authentication if OAuth is enabled
+    if ENABLE_OAUTH:
+        email = websocket.session.get("email")
+        if not email or email not in ALLOWED_EMAILS:
+            print("[websocket] Rejecting unauthenticated WebSocket connection.")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     await websocket.accept()
 
     # New browser connection = new client session (fresh uid, seq resets to 1).
@@ -253,19 +338,60 @@ async def websocket_endpoint(websocket: WebSocket):
                 action = message.get("action")
 
                 if action == "start_session":
+                    if ("source_language" in message or "target_language" in message
+                          or "source_language_code" in message or "source_language_codes" in message
+                          or "target_language_code" in message):
+                        source = message.get("source_language", liveapiworker.source_language)
+                        target = message.get("target_language", liveapiworker.target_language)
+                        source_code = message.get(
+                            "source_language_code", liveapiworker.source_language_code
+                        )
+                        source_codes = message.get("source_language_codes", None)
+                        target_code = message.get(
+                            "target_language_code", liveapiworker.target_language_code
+                        )
+                        await liveapiworker.set_language(
+                            source, target,
+                            source_code=source_code,
+                            target_code=target_code,
+                            source_codes=source_codes,
+                        )
                     await liveapiworker.start_session()
                 elif action == "stop_session":
                     await liveapiworker.stop_session()
-                elif action == "set_denoiser":
-                    liveapiworker.set_denoiser_enabled(bool(message.get("enabled", True)))
+                elif action == "set_mode":
+                    mode = message.get("mode")
+                    if mode:
+                        await liveapiworker.set_mode(mode)
+                        await websocket.send_text(
+                            json.dumps({
+                                "kind": "mode_updated",
+                                "mode": liveapiworker.mode,
+                                "model": liveapiworker.model_id,
+                            })
+                        )
+                elif action == "set_model":
+                    model = message.get("model") or message.get("model_id")
+                    if model:
+                        await liveapiworker.set_model(model)
+                        await websocket.send_text(
+                            json.dumps({
+                                "kind": "model_updated",
+                                "mode": liveapiworker.mode,
+                                "model": liveapiworker.model_id,
+                            })
+                        )
                 elif action == "set_audio_output":
                     liveapiworker.set_audio_output(bool(message.get("enabled", True)))
-                elif "source_language" in message or "target_language" in message:
+                elif ("source_language" in message or "target_language" in message
+                      or "source_language_code" in message or "source_language_codes" in message
+                      or "target_language_code" in message):
                     source = message.get("source_language", liveapiworker.source_language)
                     target = message.get("target_language", liveapiworker.target_language)
                     source_code = message.get(
                         "source_language_code", liveapiworker.source_language_code
                     )
+                    source_codes = message.get("source_language_codes", None)
                     target_code = message.get(
                         "target_language_code", liveapiworker.target_language_code
                     )
@@ -273,6 +399,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         source, target,
                         source_code=source_code,
                         target_code=target_code,
+                        source_codes=source_codes,
+                    )
+                    await websocket.send_text(
+                        json.dumps({
+                            "kind": "languages_updated",
+                            "source_language_codes": liveapiworker.source_language_codes,
+                            "target_language_code": liveapiworker.target_language_code,
+                            "source_language": liveapiworker.source_language,
+                            "target_language": liveapiworker.target_language,
+                        })
                     )
 
     except WebSocketDisconnect:

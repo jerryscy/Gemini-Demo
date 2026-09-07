@@ -1,85 +1,116 @@
-"""Chirp 3: HD supported languages (GA + Preview).
+"""Gemini 3.5 Live Translate & Transcribe supported languages.
 
 Compiled from the official GCP documentation:
-    https://cloud.google.com/text-to-speech/docs/chirp3-hd#language_availability
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-live-translate#supported-languages
 
-Each entry is (display_name, bcp47_code, is_preview). At the time of writing
-only Punjabi (India) and Chinese (Hong Kong) are in Preview; everything else
-is GA. The list is exposed to the frontend so the input/output language
-dropdowns stay in sync with a single source of truth.
+Each entry is (display_name, bcp47_code, is_preview).
 """
 
 from typing import List, Dict
 
-# (Display name, BCP-47 code, is_preview)
-CHIRP3_HD_LANGUAGES = [
-    ("Arabic (Generic)", "ar-XA", False),
-    ("Bengali (India)", "bn-IN", False),
-    ("Bulgarian (Bulgaria)", "bg-BG", False),
-    ("Chinese (Hong Kong)", "yue-HK", True),   # Preview
-    ("Croatian (Croatia)", "hr-HR", False),
-    ("Czech (Czech Republic)", "cs-CZ", False),
-    ("Danish (Denmark)", "da-DK", False),
-    ("Dutch (Belgium)", "nl-BE", False),
-    ("Dutch (Netherlands)", "nl-NL", False),
-    ("English (Australia)", "en-AU", False),
-    ("English (India)", "en-IN", False),
-    ("English (United Kingdom)", "en-GB", False),
-    ("English (United States)", "en-US", False),
-    ("Estonian (Estonia)", "et-EE", False),
-    ("Finnish (Finland)", "fi-FI", False),
-    ("French (Canada)", "fr-CA", False),
-    ("French (France)", "fr-FR", False),
-    ("German (Germany)", "de-DE", False),
-    ("Greek (Greece)", "el-GR", False),
-    ("Gujarati (India)", "gu-IN", False),
-    ("Hebrew (Israel)", "he-IL", False),
-    ("Hindi (India)", "hi-IN", False),
-    ("Hungarian (Hungary)", "hu-HU", False),
-    ("Indonesian (Indonesia)", "id-ID", False),
-    ("Italian (Italy)", "it-IT", False),
-    ("Japanese (Japan)", "ja-JP", False),
-    ("Kannada (India)", "kn-IN", False),
-    ("Korean (South Korea)", "ko-KR", False),
-    ("Latvian (Latvia)", "lv-LV", False),
-    ("Lithuanian (Lithuania)", "lt-LT", False),
-    ("Malayalam (India)", "ml-IN", False),
-    ("Mandarin Chinese (China)", "cmn-CN", False),
-    ("Marathi (India)", "mr-IN", False),
-    ("Norwegian Bokm\u00e5l (Norway)", "nb-NO", False),
-    ("Polish (Poland)", "pl-PL", False),
+GEMINI_35_LIVE_LANGUAGES = [
+    ("Afrikaans", "af", False),
+    ("Akan", "ak", False),
+    ("Albanian", "sq", False),
+    ("Amharic", "am", False),
+    ("Arabic", "ar", False),
+    ("Armenian", "hy", False),
+    ("Azerbaijani", "az", False),
+    ("Basque", "eu", False),
+    ("Belarusian", "be", False),
+    ("Bengali", "bn", False),
+    ("Bulgarian", "bg", False),
+    ("Burmese (Myanmar)", "my", False),
+    ("Catalan", "ca", False),
+    ("Chinese (Simplified)", "zh-Hans", False),
+    ("Chinese (Traditional)", "zh-Hant", False),
+    ("Croatian", "hr", False),
+    ("Czech", "cs", False),
+    ("Danish", "da", False),
+    ("Dutch", "nl", False),
+    ("English", "en", False),
+    ("Estonian", "et", False),
+    ("Filipino", "fil", False),
+    ("Finnish", "fi", False),
+    ("French", "fr", False),
+    ("Galician", "gl", False),
+    ("Georgian", "ka", False),
+    ("German", "de", False),
+    ("Greek", "el", False),
+    ("Gujarati", "gu", False),
+    ("Hausa", "ha", False),
+    ("Hebrew", "he", False),
+    ("Hindi", "hi", False),
+    ("Hungarian", "hu", False),
+    ("Icelandic", "is", False),
+    ("Indonesian", "id", False),
+    ("Italian", "it", False),
+    ("Japanese", "ja", False),
+    ("Javanese", "jv", False),
+    ("Kannada", "kn", False),
+    ("Kazakh", "kk", False),
+    ("Khmer", "km", False),
+    ("Kinyarwanda", "rw", False),
+    ("Korean", "ko", False),
+    ("Lao", "lo", False),
+    ("Latvian", "lv", False),
+    ("Lithuanian", "lt", False),
+    ("Macedonian", "mk", False),
+    ("Malay", "ms", False),
+    ("Malayalam", "ml", False),
+    ("Marathi", "mr", False),
+    ("Mongolian", "mn", False),
+    ("Nepali", "ne", False),
+    ("Norwegian", "no", False),
+    ("Persian", "fa", False),
+    ("Polish", "pl", False),
     ("Portuguese (Brazil)", "pt-BR", False),
-    ("Punjabi (India)", "pa-IN", True),        # Preview
-    ("Romanian (Romania)", "ro-RO", False),
-    ("Russian (Russia)", "ru-RU", False),
-    ("Serbian (Cyrillic)", "sr-RS", False),
-    ("Slovak (Slovakia)", "sk-SK", False),
-    ("Slovenian (Slovenia)", "sl-SI", False),
-    ("Spanish (Spain)", "es-ES", False),
-    ("Spanish (United States)", "es-US", False),
-    ("Swahili (Kenya)", "sw-KE", False),
-    ("Swedish (Sweden)", "sv-SE", False),
-    ("Tamil (India)", "ta-IN", False),
-    ("Telugu (India)", "te-IN", False),
-    ("Thai (Thailand)", "th-TH", False),
-    ("Turkish (Turkey)", "tr-TR", False),
-    ("Ukrainian (Ukraine)", "uk-UA", False),
-    ("Urdu (India)", "ur-IN", False),
-    ("Vietnamese (Vietnam)", "vi-VN", False),
+    ("Portuguese (Portugal)", "pt-PT", False),
+    ("Punjabi", "pa", False),
+    ("Romanian", "ro", False),
+    ("Russian", "ru", False),
+    ("Serbian", "sr", False),
+    ("Sindhi", "sd", False),
+    ("Sinhala", "si", False),
+    ("Slovak", "sk", False),
+    ("Slovenian", "sl", False),
+    ("Spanish", "es", False),
+    ("Sundanese", "su", False),
+    ("Swahili", "sw", False),
+    ("Swedish", "sv", False),
+    ("Tamil", "ta", False),
+    ("Telugu", "te", False),
+    ("Thai", "th", False),
+    ("Turkish", "tr", False),
+    ("Ukrainian", "uk", False),
+    ("Urdu", "ur", False),
+    ("Uzbek", "uz", False),
+    ("Vietnamese", "vi", False),
+    ("Zulu", "zu", False),
 ]
+
+# Backwards compatibility alias
+CHIRP3_HD_LANGUAGES = GEMINI_35_LIVE_LANGUAGES
 
 
 def languages_json() -> List[Dict[str, object]]:
     """Return the language list as JSON-serialisable dicts for the frontend."""
     return [
         {"name": name, "code": code, "preview": preview}
-        for (name, code, preview) in CHIRP3_HD_LANGUAGES
+        for (name, code, preview) in GEMINI_35_LIVE_LANGUAGES
     ]
 
 
 def name_for_code(code: str) -> str:
     """Look up the display name for a BCP-47 code (falls back to the code)."""
-    for name, c, _ in CHIRP3_HD_LANGUAGES:
+    if code in ("cmn-CN", "zh-CN"):
+        code = "zh-Hans"
+    elif code in ("yue-HK", "zh-TW"):
+        code = "zh-Hant"
+    elif code.startswith("en-"):
+        code = "en"
+
+    for name, c, _ in GEMINI_35_LIVE_LANGUAGES:
         if c == code:
             return name
     return code

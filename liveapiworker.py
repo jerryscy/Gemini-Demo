@@ -25,6 +25,7 @@ from google.genai.types import (
     ActivityHandling,
     StartSensitivity,
     EndSensitivity,
+    TranslationConfig,
 )
 
 
@@ -64,156 +65,91 @@ def extract_language_code(language: str) -> str:
     return match.group(1) if match else language
 
 
+def normalize_language_code(code: str) -> str:
+    """Normalize language code to the format required by Gemini 3.5 Live models.
+
+    Per official Google documentation:
+    - Chinese (Simplified): 'zh-Hans'
+    - Chinese (Traditional): 'zh-Hant'
+    - Portuguese (Brazil): 'pt-BR', (Portugal): 'pt-PT'
+    - Other languages: ISO-639-1 base codes (e.g., 'en', 'es', 'ja', 'fr', 'de')
+    """
+    if not code:
+        return "en"
+    code = code.strip()
+    special_mapping = {
+        "cmn-CN": "zh-Hans",
+        "zh-CN": "zh-Hans",
+        "zh": "zh-Hans",
+        "yue-HK": "zh-Hant",
+        "zh-TW": "zh-Hant",
+        "ar-XA": "ar",
+        "sr-RS": "sr",
+        "nb-NO": "no",
+        "nb": "no",
+    }
+    if code in special_mapping:
+        return special_mapping[code]
+    if code in ("zh-Hans", "zh-Hant", "pt-BR", "pt-PT"):
+        return code
+    return code.split("-")[0].lower()
+
+normalize_target_language_code = normalize_language_code
+
 
 class LiveAPIWorker:
 
-    MODEL_ID = os.getenv("LIVE_API_MODEL", "gemini-live-2.5-flash-native-audio")
+    TRANSLATION_MODEL_ID = os.getenv("TRANSLATION_MODEL_ID", "gemini-3.5-live-translate-preview")
+    TRANSCRIPTION_MODEL_ID = os.getenv("TRANSCRIPTION_MODEL_ID", "gemini-3.5-transcribe-live-preview")
+    MODEL_ID = TRANSLATION_MODEL_ID
 
-    def __init__(self, source_language: str = "English (United States)",
-                 target_language: str = "Chinese (Simplified, China)",
-                 source_language_code: Optional[str] = None,
-                 target_language_code: Optional[str] = None,
-                 denoiser=None):
+    def __init__(self, source_language: str = "Chinese (Simplified)",
+                 target_language: str = "English",
+                 source_language_code: Optional[str] = "zh-Hans",
+                 target_language_code: Optional[str] = "en",
+                 source_language_codes: Optional[list] = None,
+                 mode: Optional[str] = None):
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        location = os.getenv("GOOGLE_CLOUD_LOCATION")
-        if not project_id or not location:
+        # gemini-3.5-live-translate-preview and gemini-3.5-transcribe-live-preview only support "global"
+        location = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+        if not project_id:
             raise ValueError(
-                "GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION must be set in the .env file"
+                "GOOGLE_CLOUD_PROJECT must be set in the .env file"
             )
 
         self.client = genai.Client(
-            vertexai=True,
+            enterprise=True,
             project=project_id,
             location=location,
-            http_options=HttpOptions(api_version="v1"),
         )
+
+        # Mode: 'translation' (Live Translation) or 'transcription' (Live Transcription)
+        self.mode = mode or os.getenv("DEFAULT_MODE", "translation")
+        if self.mode not in ("translation", "transcription"):
+            self.mode = "translation"
+        self.active_model_id: Optional[str] = None
 
         # Display name shown in the UI prompt (e.g. "English (United States)").
         self.source_language = source_language
         self.target_language = target_language
-        # BCP-47 codes used for the Live API transcription config (e.g. "en-US").
-        # Fall back to extracting from the display name for legacy callers.
-        self.source_language_code = source_language_code or extract_language_code(source_language)
-        self.target_language_code = target_language_code or extract_language_code(target_language)
+        self.target_language_code = target_language_code or extract_language_code(target_language) or "en"
+
+        # Multiple source language codes supported
+        if source_language_codes:
+            self.source_language_codes = [c for c in source_language_codes if c]
+        elif source_language_code:
+            self.source_language_codes = [c.strip() for c in source_language_code.split(",") if c.strip()]
+        else:
+            self.source_language_codes = [extract_language_code(source_language)]
+
+        self.source_language_code = self.source_language_codes[0] if self.source_language_codes else "zh-Hans"
         self.system_instruction = build_system_instruction(source_language, target_language)
 
-        print(f"Source language: {self.source_language} [{self.source_language_code}]")
+        print(f"Mode: {self.mode} (Model: {self.model_id})")
+        print(f"Source languages: {self.source_language_codes}")
         print(f"Target language: {self.target_language} [{self.target_language_code}]")
 
-        # ------------------------------------------------------------------
-        # LiveConnectConfig — full configuration for the Live API session.
-        # ------------------------------------------------------------------
-        # The same shape of config is also rebuilt inside set_language() when
-        # the user changes the source/target languages mid-app. Any field
-        # added or tweaked here should be mirrored there.
-        # Reference: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1
-        self.config = LiveConnectConfig(
-            # Ask the model to emit audio (TTS) responses. Transcripts are
-            # delivered via the *_audio_transcription fields below.
-            response_modalities=["AUDIO"],
-
-            # Server-side STT for the user's microphone audio. The BCP-47
-            # `language_codes` tell Gemini which language to expect on the
-            # input stream so transcription accuracy stays high.
-            input_audio_transcription=AudioTranscriptionConfig(
-                language_codes=[self.source_language_code]
-            ),
-            # Server-side STT for the model's spoken translation. Used so the
-            # frontend can display the translated text alongside the audio.
-            output_audio_transcription=AudioTranscriptionConfig(
-                language_codes=[self.target_language_code]
-            ),
-
-            # Proactive audio: lets the model start speaking as soon as it has
-            # enough context, instead of waiting for a complete user turn.
-            # Combined with low silence_duration_ms below this delivers the
-            # near-real-time "interpreter" feel.
-            proactivity=ProactivityConfig(proactive_audio=True),
-
-            # ---------------- Realtime input / VAD ----------------
-            # Voice Activity Detection runs server-side on the streamed PCM
-            # so the model knows when the user starts and stops talking.
-            # Reference: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.AutomaticActivityDetection
-            realtime_input_config=RealtimeInputConfig(
-                automatic_activity_detection=AutomaticActivityDetection(
-                    # disabled=False -> let the server perform automatic VAD.
-                    # If set to True the client must send explicit
-                    # activity_start / activity_end signals instead.
-                    disabled=False,
-
-                    # start_of_speech_sensitivity:
-                    #   START_SENSITIVITY_LOW    -> harder to trigger; ignores
-                    #                               most background noise and
-                    #                               brief blips. Best when the
-                    #                               environment is noisy or you
-                    #                               want to avoid false starts.
-                    #   START_SENSITIVITY_HIGH   -> easier to trigger; reacts
-                    #                               to softer/shorter speech.
-                    # We pick LOW because translation feedback through the
-                    # speakers can otherwise be misdetected as user speech.
-                    # Reference: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.AutomaticActivityDetection.StartSensitivity
-                    start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_LOW,
-
-                    # end_of_speech_sensitivity:
-                    #   END_SENSITIVITY_LOW   -> waits longer before declaring
-                    #                            the user has stopped (better
-                    #                            for slow / pause-heavy
-                    #                            speakers, fewer cut-offs).
-                    #   END_SENSITIVITY_HIGH  -> ends the turn quickly on a
-                    #                            short pause (lower latency,
-                    #                            but may cut speakers off).
-                    # We pick HIGH so translation begins as soon as possible
-                    # after each phrase, which is what users expect from a
-                    # real-time interpreter.
-                    # Reference: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.AutomaticActivityDetection.EndSensitivity
-                    end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-
-                    # prefix_padding_ms: minimum duration of detected speech
-                    # (in ms) before a turn is officially considered started.
-                    # A small value keeps onset latency low; raise it if you
-                    # want to ignore very brief sounds (claps, taps, etc.).
-                    prefix_padding_ms=30,
-
-                    # silence_duration_ms: how long of a trailing silence is
-                    # required before the turn is considered ended.
-                    # Lower = snappier turn-taking but more risk of cutting
-                    # the speaker off mid-thought; higher = safer but slower.
-                    silence_duration_ms=0,
-                ),
-                # activity_handling = NO_INTERRUPTION: new speech does NOT cancel
-                # the model's in-progress translation; it finishes the current
-                # utterance first, so no translation is truncated mid-stream.
-                # Reference: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.ActivityHandling
-                activity_handling=ActivityHandling.NO_INTERRUPTION,
-            ),
-
-            # Lets the model adapt its tone (excited, calm, etc.) to mirror
-            # the speaker — important for "vocal fidelity" translation.
-            enable_affective_dialog=True,
-
-            # Voice for the synthesized translation. "puck" is one of the
-            # prebuilt Live API voices; swap for any other supported voice.
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name="puck")
-                ),
-            ),
-
-            # ---------------- Context Window Compression ----------------
-            # Critical for long translation sessions. Without this, audio
-            # tokens (~25 tokens/sec) fill the context window in ~15 minutes
-            # and the session is forced to end. The sliding window keeps the
-            # most recent `target_tokens` of context and drops older audio.
-            context_window_compression=ContextWindowCompressionConfig(
-                sliding_window=SlidingWindow(
-                    target_tokens=8192
-                ),
-            ),
-
-            # System prompt that turns the model into a translation conduit
-            # (see SYSTEM_PROMPT_TEMPLATE at the top of this file).
-            system_instruction=self.system_instruction,
-        )
+        self.config = self._build_config()
 
         self.session = None
 
@@ -258,10 +194,6 @@ class LiveAPIWorker:
         # Exposed so newly-connected WebSocket clients can read the current
         # state and so status changes can be broadcast as events.
         self.live_api_connected: bool = False
-
-        # ---- DeepFilterNet2 denoiser (applied to incoming mic audio) ----
-        # May be None if denoising is unavailable. Toggled live from the UI.
-        self.denoiser = denoiser
 
         # When False, translated audio is NOT sent to the browser (saves the
         # WebSocket bandwidth + browser decode when playback is muted, keeping
@@ -336,11 +268,6 @@ class LiveAPIWorker:
         self._t2_has = False
         self._t1_final = False
 
-    def set_denoiser_enabled(self, enabled: bool) -> None:
-        """Toggle the DeepFilterNet denoiser at runtime (live A/B comparison)."""
-        if self.denoiser is not None:
-            self.denoiser.set_enabled(enabled)
-
     def set_audio_output(self, enabled: bool) -> None:
         """Toggle whether translated audio is streamed to the browser."""
         self.audio_output_enabled = enabled
@@ -358,71 +285,124 @@ class LiveAPIWorker:
         self._stopped_at = time.monotonic()
         print("Pause (session kept alive for instant resume).")
 
+    @property
+    def model_id(self) -> str:
+        """Return the active model ID."""
+        if getattr(self, "active_model_id", None):
+            return self.active_model_id
+        if self.mode == "transcription":
+            return self.TRANSCRIPTION_MODEL_ID
+        return self.TRANSLATION_MODEL_ID
+
+    async def set_model(self, model_id: str) -> None:
+        """Explicitly switch the model ID and adjust mode accordingly."""
+        if not model_id or getattr(self, "active_model_id", None) == model_id:
+            return
+        print(f"Setting active model from {self.model_id} to {model_id}...")
+        self.active_model_id = model_id
+        if "transcribe" in model_id:
+            self.mode = "transcription"
+        else:
+            self.mode = "translation"
+        self.config = self._build_config()
+        print(f"Switched model to {self.model_id} (Mode: {self.mode})")
+        if self.session is not None:
+            if self._paused:
+                print("Closing idle Live API session to apply new model on next start...")
+                self._intentional_stop = True
+                self._start_event.clear()
+            else:
+                print("Restarting Live API session to apply new model...")
+                self._restart_requested = True
+            if self._active_receiver and not self._active_receiver.done():
+                self._active_receiver.cancel()
+
+    def _build_config(self) -> LiveConnectConfig:
+        """Construct the LiveConnectConfig for Gemini 3.5 Live models."""
+        norm_source_codes = [normalize_language_code(c) for c in self.source_language_codes]
+        norm_target = normalize_language_code(self.target_language_code)
+
+        if "transcribe" in self.model_id:
+            # Vertex ASR (gemini-3.5-transcribe-live-preview)
+            # Modality TEXT only. No translation_config or speech_config.
+            return LiveConnectConfig(
+                response_modalities=["TEXT"],
+                input_audio_transcription=AudioTranscriptionConfig(
+                    language_codes=norm_source_codes
+                ),
+                context_window_compression=ContextWindowCompressionConfig(
+                    sliding_window=SlidingWindow(target_tokens=8192),
+                ),
+                realtime_input_config=RealtimeInputConfig(
+                    automatic_activity_detection=AutomaticActivityDetection(
+                        disabled=False,
+                        start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_LOW,
+                        end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
+                        prefix_padding_ms=30,
+                        silence_duration_ms=0,
+                    ),
+                    activity_handling=ActivityHandling.NO_INTERRUPTION,
+                ),
+            )
+        else:
+            # Live Translation (gemini-3.5-live-translate-preview)
+            return LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                input_audio_transcription=AudioTranscriptionConfig(),
+                output_audio_transcription=AudioTranscriptionConfig(),
+                translation_config=TranslationConfig(
+                    target_language_code=norm_target or "en",
+                    echo_target_language=False,
+                ),
+            )
+
+    async def set_mode(self, mode: str) -> None:
+        """Switch between 'translation' and 'transcription'."""
+        if mode not in ("translation", "transcription"):
+            print(f"Unknown mode requested: {mode}")
+            return
+        if self.mode == mode and getattr(self, "active_model_id", None) is None:
+            return
+        print(f"Switching mode from {self.mode} to {mode}...")
+        self.mode = mode
+        # Reset model to default for the chosen mode
+        self.active_model_id = self.TRANSCRIPTION_MODEL_ID if mode == "transcription" else self.TRANSLATION_MODEL_ID
+        self.config = self._build_config()
+        print(f"Switched mode to {self.mode} (Model: {self.model_id})")
+        if self.session is not None:
+            if self._paused:
+                print("Closing idle Live API session to apply new mode on next start...")
+                self._intentional_stop = True
+                self._start_event.clear()
+            else:
+                print("Restarting Live API session to apply new mode...")
+                self._restart_requested = True
+            if self._active_receiver and not self._active_receiver.done():
+                self._active_receiver.cancel()
+
     async def set_language(self, source: str, target: str,
                            source_code: Optional[str] = None,
-                           target_code: Optional[str] = None) -> None:
+                           target_code: Optional[str] = None,
+                           source_codes: Optional[list] = None) -> None:
         self.source_language = source
         self.target_language = target
-        if source_code:
-            self.source_language_code = source_code
         if target_code:
             self.target_language_code = target_code
-        self.system_instruction = build_system_instruction(source, target)
+        else:
+            self.target_language_code = extract_language_code(target) or "en"
+        if source_codes:
+            self.source_language_codes = [c for c in source_codes if c]
+        elif source_code:
+            self.source_language_codes = [c.strip() for c in source_code.split(",") if c.strip()]
+        if self.source_language_codes:
+            self.source_language_code = self.source_language_codes[0]
 
-        # Refresh the LiveConnectConfig so any newly-opened session uses the
-        # updated transcription language codes and system instruction.
-        self.config = LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            input_audio_transcription=AudioTranscriptionConfig(
-                language_codes=[self.source_language_code]
-            ),
-            output_audio_transcription=AudioTranscriptionConfig(
-                language_codes=[self.target_language_code]
-            ),
-            # See the constructor above for a full description of each field.
-            # The same configuration is rebuilt here so that a language change
-            # (which updates the transcription language codes and the system
-            # prompt) takes effect on the next Live API session.
-            proactivity=ProactivityConfig(proactive_audio=True),
-            realtime_input_config=RealtimeInputConfig(
-                automatic_activity_detection=AutomaticActivityDetection(
-                    # Server-side VAD enabled.
-                    disabled=False,
-                    # LOW = less sensitive start-of-speech detection — ignores
-                    # most background noise. See StartSensitivity reference:
-                    # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.AutomaticActivityDetection.StartSensitivity
-                    start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
-                    # HIGH = more sensitive end-of-speech detection — closes
-                    # turns quickly so translation output starts with low
-                    # latency. See EndSensitivity reference:
-                    # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1beta1#google.cloud.aiplatform.v1beta1.RealtimeInputConfig.AutomaticActivityDetection.EndSensitivity
-                    end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-                    # Minimum speech duration before a turn officially starts.
-                    prefix_padding_ms=30,
-                    # Minimum trailing silence before a turn officially ends.
-                    silence_duration_ms=0,
-                ),
-                # NO_INTERRUPTION: new speech never truncates an in-progress
-                # translation (see constructor above for details).
-                activity_handling=ActivityHandling.NO_INTERRUPTION,
-            ),
-            enable_affective_dialog=True,
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(voice_name="puck")
-                ),
-            ),
-            # Sliding-window context compression — keeps the session usable
-            # well beyond the ~15 min audio-token budget of the raw window.
-            context_window_compression=ContextWindowCompressionConfig(
-                sliding_window=SlidingWindow(target_tokens=8192),
-            ),
-            system_instruction=self.system_instruction,
-        )
+        self.system_instruction = build_system_instruction(source, target)
+        self.config = self._build_config()
 
         print(
-            f"Languages updated -> A: {source} [{self.source_language_code}], "
-            f"B: {target} [{self.target_language_code}]"
+            f"Languages updated -> Sources: {self.source_language_codes}, "
+            f"Target: {self.target_language} [{self.target_language_code}]"
         )
 
         if self.session is not None:
@@ -431,8 +411,13 @@ class LiveAPIWorker:
             # effect immediately we recycle the current session: signal the
             # run() loop to tear down the existing connection and reconnect
             # right away with the freshly-built LiveConnectConfig.
-            print("Restarting Live API session to apply new language codes...")
-            self._restart_requested = True
+            if self._paused:
+                print("Closing idle Live API session to apply new languages on next start...")
+                self._intentional_stop = True
+                self._start_event.clear()
+            else:
+                print("Restarting Live API session to apply new language codes...")
+                self._restart_requested = True
             if self._active_receiver and not self._active_receiver.done():
                 self._active_receiver.cancel()
 
@@ -443,14 +428,10 @@ class LiveAPIWorker:
     # ------------------------------------------------------------------
 
     async def _sender_task(self, session) -> None:
-        """Pull audio chunks from the input queue, denoise, and forward them.
+        """Pull audio chunks from the input queue, buffer into 100ms batches, and forward them."""
+        target_chunk_bytes = 3200  # 100ms at 16kHz 16-bit mono PCM
+        buffer = bytearray()
 
-        DeepFilterNet runs in a separate Python 3.9 sidecar process (it needs a
-        native lib + numpy<2 that can't live in this interpreter). The denoiser
-        client streams each chunk to the sidecar over a local WebSocket and
-        gets the denoised chunk back. When the denoiser is disabled the client
-        returns the bytes unchanged (no sidecar round-trip).
-        """
         while True:
             audio_chunk = await self._audio_input_queue.get()
             if audio_chunk is None:          # graceful stop sentinel
@@ -458,12 +439,26 @@ class LiveAPIWorker:
                 break
             try:
                 if self._paused:
+                    buffer.clear()
                     continue  # Stop pressed — drop audio, keep session alive
-                if self.denoiser is not None and self.denoiser.enabled:
-                    audio_chunk = await self.denoiser.process(audio_chunk)
-                await session.send_realtime_input(
-                    audio=Blob(data=audio_chunk, mime_type="audio/pcm;rate=16000")
-                )
+
+                buffer.extend(audio_chunk)
+
+                # Send when buffer reaches target 100ms chunk size
+                while len(buffer) >= target_chunk_bytes:
+                    chunk_to_send = bytes(buffer[:target_chunk_bytes])
+                    del buffer[:target_chunk_bytes]
+                    await session.send_realtime_input(
+                        audio=Blob(data=chunk_to_send, mime_type="audio/pcm;rate=16000")
+                    )
+
+                # Flush leftover audio when queue is empty and at least 50ms (1600 bytes) accumulated
+                if self._audio_input_queue.empty() and len(buffer) >= 1600:
+                    chunk_to_send = bytes(buffer)
+                    buffer.clear()
+                    await session.send_realtime_input(
+                        audio=Blob(data=chunk_to_send, mime_type="audio/pcm;rate=16000")
+                    )
             except Exception as exc:
                 print(f"[sender] Error sending audio: {exc}")
             finally:
@@ -504,48 +499,75 @@ class LiveAPIWorker:
                 continue
 
             input_t = getattr(server_content, "input_transcription", None)
+            interim_input_t = getattr(server_content, "interim_input_transcription", None)
             output_t = getattr(server_content, "output_transcription", None)
-            turn_complete = getattr(server_content, "turn_complete", False)
+            turn_complete = (
+                getattr(server_content, "turn_complete", False)
+                or getattr(server_content, "generation_complete", False)
+            )
 
             if DEBUG_LIVE_API:
+                if interim_input_t and interim_input_t.text:
+                    print(f"interim_input_transcription: {interim_input_t.text}")
                 if input_t and input_t.text:
                     print(f"input_transcription: {input_t.text}")
                 if output_t and output_t.text:
                     print(f"output_transcription: {output_t.text}")
                 if turn_complete:
-                    print("turn_complete: true")
+                    print(f"turn_complete: {turn_complete}")
 
-            # ---- type 1: input transcription (emit exactly as it arrives) ----
-            if input_t and input_t.text:
-                self._t1_has = True
-                await self._emit_delta(type_=1, delta=input_t.text, finished=False)
+            if self.mode == "transcription":
+                # ---- Transcription mode (ASR only) ----
+                if interim_input_t and interim_input_t.text:
+                    self._t1_has = True
+                    await self._emit_delta(type_=1, delta="", finished=False, text=interim_input_t.text)
+                if input_t and input_t.text:
+                    self._t1_has = True
+                    await self._emit_delta(type_=1, delta="", finished=False, text=input_t.text)
+            else:
+                # ---- Translation mode (S2ST) ----
+                if interim_input_t and interim_input_t.text:
+                    self._t1_has = True
+                    await self._emit_delta(type_=1, delta="", finished=False, text=interim_input_t.text)
+                elif input_t and input_t.text:
+                    self._t1_has = True
+                    await self._emit_delta(type_=1, delta=input_t.text, finished=False)
 
-            # ---- type 2: translation / output transcription (as it arrives) ----
-            if output_t and output_t.text:
-                # Finalize type 1 the moment the translation starts — this is
-                # instant and does NOT delay the output.
-                if self._t1_has and not self._t1_final:
-                    self._t1_final = True
-                    await self._emit_delta(type_=1, delta="", finished=True)
-                self._t2_has = True
-                await self._emit_delta(type_=2, delta=output_t.text, finished=False)
-
-            # ---- translated audio (24 kHz PCM) for browser playback ----
-            # Skip entirely when playback is muted — no point serializing it
-            # onto the queue/socket the text deltas share.
-            if self.audio_output_enabled:
                 model_turn = getattr(server_content, "model_turn", None)
+                output_text = None
+                if output_t and output_t.text:
+                    output_text = output_t.text
+
+                # Check if model_turn contains text parts (or quota/error notices)
                 if model_turn and model_turn.parts:
                     for part in model_turn.parts:
-                        if part.inline_data:
+                        part_text = getattr(part, "text", None)
+                        if part_text:
+                            part_text_stripped = part_text.strip()
+                            if "quota" in part_text_stripped.lower() or "error" in part_text_stripped.lower():
+                                print(f"[receiver] Live API notice: {part_text_stripped}")
+                            elif not output_text:
+                                output_text = part_text
+
+                if output_text:
+                    # Finalize type 1 the moment the translation starts — this is
+                    # instant and does NOT delay the output.
+                    if self._t1_has and not self._t1_final:
+                        self._t1_final = True
+                        await self._emit_delta(type_=1, delta="", finished=True)
+                    self._t2_has = True
+                    await self._emit_delta(type_=2, delta=output_text, finished=False)
+
+                # ---- translated audio (24 kHz PCM) for browser playback ----
+                if self.audio_output_enabled and model_turn and model_turn.parts:
+                    for part in model_turn.parts:
+                        if getattr(part, "inline_data", None) and part.inline_data.data:
                             await self.event_queue.put(
                                 {"type": "audio", "data": part.inline_data.data}
                             )
 
             # ---- turnComplete: send finished markers, bump seq ----
             if turn_complete:
-                # Skip empty turns (initial silent turn / VAD blip) so we don't
-                # emit blank records or waste a seq number.
                 if not self._t1_has and not self._t2_has:
                     self._reset_turn_state()
                     continue
@@ -557,86 +579,63 @@ class LiveAPIWorker:
                 self.seq += 1
                 self._reset_turn_state()
 
-    async def _emit_delta(self, type_: int, delta: str, finished: bool) -> None:
+    async def _emit_delta(self, type_: int, delta: str, finished: bool, text: Optional[str] = None) -> None:
         """Push one lightweight delta record onto the event queue.
 
-        The wire carries only the new text (delta) — the frontend accumulates
-        it into the full `message` for display and for the raw-format panel.
-        This avoids re-sending the whole growing string on every token.
+        The wire carries either the new text chunk (delta) or the full current text
+        (text) when available (e.g. interim ASR transcription updates).
         """
+        payload = {
+            "uid": self.session_uid,
+            "seq": self.seq,
+            "type": type_,
+            "delta": delta,
+            "finished": finished,
+        }
+        if text is not None:
+            payload["text"] = text
         await self.event_queue.put(
             {
                 "type": "data",
-                "payload": {
-                    "uid": self.session_uid,
-                    "seq": self.seq,
-                    "type": type_,
-                    "delta": delta,
-                    "finished": finished,
-                },
+                "payload": payload,
             }
         )
 
     async def _receiver_supervisor(self, session) -> None:
-        """Keep a `_receiver_task` running at all times for this session.
+        """Run the `_receiver_task` for this session and handle lifecycle.
 
-        Runs as its own async task (stored in `_active_receiver`). Each turn is
-        handled by a separate `_receiver_task` (stored in `_current_receiver`).
-        The instant one finishes, the next is spawned with **no gap**, so there
-        is zero inter-turn latency. Transient errors are logged and the receiver
-        is restarted; cancellation (stop / language change / shutdown) cancels
-        the in-flight child receiver and exits.
+        session.receive() streams messages continuously across all conversation
+        turns for the lifetime of this Live API WebSocket connection. When it
+        finishes or errors out, the connection is closed and run() tears it down.
         """
-        while not self._intentional_stop and not self._restart_requested:
-            self._current_receiver = asyncio.create_task(
-                self._receiver_task(session), name="live-api-receiver"
-            )
-            try:
-                await self._current_receiver
-                # Turn finished — loop immediately to spawn the next receiver.
-            except asyncio.CancelledError:
-                # The supervisor itself was cancelled: cancel the child too.
-                if not self._current_receiver.done():
-                    self._current_receiver.cancel()
-                    await asyncio.gather(self._current_receiver, return_exceptions=True)
-                raise
-            except Exception as exc:
-                print(f"[receiver] Error: {exc}. Restarting receiver...")
-                await asyncio.sleep(0.1)  # tiny backoff to avoid a hot error loop
+        self._current_receiver = asyncio.create_task(
+            self._receiver_task(session), name="live-api-receiver"
+        )
+        try:
+            await self._current_receiver
+        except asyncio.CancelledError:
+            if self._current_receiver and not self._current_receiver.done():
+                self._current_receiver.cancel()
+                await asyncio.gather(self._current_receiver, return_exceptions=True)
+            raise
+        except Exception as exc:
+            print(f"[receiver] Live API session receiver ended with error: {exc}")
+            raise
 
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Wait for a start signal then connect to the Live API.
-
-        Session lifecycle
-        -----------------
-        * run() blocks on _start_event until start_session() is called
-          (i.e. Start Recording pressed).  No Live API session is opened while
-          idle, keeping the browser WebSocket connection persistent.
-        * Once started, one session handles multiple turns.  The receiver task
-          is restarted after each turn completes (acting like an outer while-
-          loop), so transient errors don't silently kill reception.
-        * stop_session() cancels _active_receiver and clears _start_event so
-          the session closes and run() goes back to waiting.
-        * On genuine connection errors a 3-second back-off is applied before
-          waiting for the next start signal.
-        """
+        """Wait for a start signal then connect to the Live API."""
         while True:
             # ---- Wait for Start Recording ----
-            # If a language change requested a restart, _start_event is still
-            # set so this wait returns immediately and we reconnect with the
-            # freshly-built config without requiring another button press.
-            if self._restart_requested:
-                print("Reconnecting Live API with updated language codes...")
-            else:
-                print("Waiting for Start Recording signal...")
-            await self._start_event.wait()
-            self._intentional_stop = False
-            self._restart_requested = False
+            if not self._start_event.is_set():
+                print("Worker idle. Waiting for Start Recording...")
+                await self._start_event.wait()
 
+            self._restart_requested = False
+            self._intentional_stop = False
 
             # Drain any stale audio left from a previous session.
             while not self._audio_input_queue.empty():
@@ -647,12 +646,12 @@ class LiveAPIWorker:
                     break
 
             try:
-                print("Establishing connection with Live API...")
+                print(f"Establishing connection with Live API ({self.model_id})...")
                 await self.event_queue.put(
                     {"type": "live_api_status", "connected": False, "state": "connecting"}
                 )
                 async with self.client.aio.live.connect(
-                    model=self.MODEL_ID, config=self.config
+                    model=self.model_id, config=self.config
                 ) as session:
                     print("Connection with Live API established.")
                     self.session = session
@@ -682,11 +681,11 @@ class LiveAPIWorker:
                     try:
                         await self._active_receiver
                     except asyncio.CancelledError:
-                        # Cancelled by the idle watcher / set_language() — expected.
-                        # For a genuine app shutdown (neither flag set) propagate
-                        # so the outer worker task terminates.
-                        if not (self._intentional_stop or self._restart_requested):
+                        # If the parent worker task itself is being cancelled for app shutdown, propagate
+                        cur_task = asyncio.current_task()
+                        if cur_task and hasattr(cur_task, "cancelling") and cur_task.cancelling() > 0:
                             raise
+                        # Otherwise this was just a child task cancellation (session recycled or idle closed)
                     finally:
                         # Tear down the idle watcher, supervisor and receiver.
                         for task in (idle_task, self._active_receiver, self._current_receiver):
@@ -708,19 +707,23 @@ class LiveAPIWorker:
                         await self.event_queue.put(
                             {"type": "live_api_status", "connected": False, "state": "disconnected"}
                         )
+                        if self._paused and not self._restart_requested:
+                            self._start_event.clear()
                         print("Live API session closed.")
 
             except asyncio.CancelledError:
                 raise  # propagate — application is shutting down
             except Exception as exc:
-                print(f"[run] Connection error: {exc}. Retrying after 3 s...")
+                print(f"[run] Connection error: {exc}. Retrying after 2 s...")
                 self.live_api_connected = False
                 await self.event_queue.put(
                     {"type": "live_api_status", "connected": False, "state": "error"}
                 )
-                self._start_event.clear()   # require a new Start Recording press
-                await asyncio.sleep(3)
-                continue
+                if self._intentional_stop:
+                    self._start_event.clear()   # require a new Start Recording press
+                else:
+                    await asyncio.sleep(2)
+                    continue
 
             # After an intentional stop, loop back and wait for the next
             # Start Recording press without any delay.
