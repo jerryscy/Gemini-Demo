@@ -82,15 +82,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # --- Google OAuth 2.0 & Session Configuration ---
-ENABLE_OAUTH = os.getenv("ENABLE_OAUTH", "false").lower() in ("1", "true", "yes", "on")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-this-to-a-very-secure-random-key-in-prod-123456")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("OAUTH_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET") or os.getenv("OAUTH_CLIENT_SECRET", "")
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY") or os.getenv("SESSION_SECRET", "change-this-to-a-very-secure-random-key-in-prod-123456")
+ALLOWED_HD = os.getenv("ALLOWED_HD", "").strip().lower()
+
+_raw_enable = os.getenv("ENABLE_OAUTH", "")
+if _raw_enable:
+    ENABLE_OAUTH = _raw_enable.lower() in ("1", "true", "yes", "on")
+else:
+    ENABLE_OAUTH = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
 ALLOWED_EMAILS = [
     email.strip().lower()
     for email in os.getenv("ALLOWED_EMAILS", "jerryscy@gmail.com").split(",")
     if email.strip()
 ]
+
+def _get_redirect_uri(request: Request) -> str:
+    if configured := os.getenv("OAUTH_REDIRECT_URI"):
+        return configured
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return f"{proto}://{request.headers.get('host')}/callback"
 
 # Enable Starlette's SessionMiddleware for managing signed session cookies (needed only if OAuth is enabled)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY, max_age=86400 * 7) # 7 days session
@@ -108,7 +121,7 @@ async def login(request: Request):
     """Redirect to Google's OAuth 2.0 Consent Screen."""
     if not ENABLE_OAUTH:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
-    redirect_uri = f"{request.url.scheme}://{request.headers.get('host')}/callback"
+    redirect_uri = _get_redirect_uri(request)
     auth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?response_type=code"
@@ -120,6 +133,7 @@ async def login(request: Request):
     return RedirectResponse(url=auth_url)
 
 
+@app.get("/auth")
 @app.get("/callback")
 async def callback(request: Request, code: Optional[str] = None, error: Optional[str] = None):
     """Handle Google OAuth 2.0 callback, exchange code, verify email, and set session."""
@@ -128,7 +142,7 @@ async def callback(request: Request, code: Optional[str] = None, error: Optional
     if error or not code:
         raise HTTPException(status_code=400, detail=f"OAuth error: {error or 'missing authorization code'}")
     
-    redirect_uri = f"{request.url.scheme}://{request.headers.get('host')}/callback"
+    redirect_uri = _get_redirect_uri(request)
     
     async with httpx.AsyncClient() as client:
         # Exchange authorization code for an access token
@@ -159,8 +173,10 @@ async def callback(request: Request, code: Optional[str] = None, error: Optional
         user_info = user_res.json()
         email = user_info.get("email", "").strip().lower()
         
-        # Restrict login to authorized test users
-        if not email or email not in ALLOWED_EMAILS:
+        # Restrict login to authorized test users or domain
+        is_allowed_email = email in ALLOWED_EMAILS
+        is_allowed_hd = bool(ALLOWED_HD and (email.endswith(f"@{ALLOWED_HD}") or user_info.get("hd") == ALLOWED_HD))
+        if not email or (not is_allowed_email and not is_allowed_hd):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: {email} is not authorized for this application."
