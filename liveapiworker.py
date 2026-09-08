@@ -264,6 +264,12 @@ class LiveAPIWorker:
         print(f"Start/resume. uid={self.session_uid}, seq={self.seq}, "
               f"session_open={self.live_api_connected}")
 
+    def ensure_connected(self) -> None:
+        """Ensure the Live API session connects if currently idle."""
+        self._intentional_stop = False
+        if not self._start_event.is_set():
+            self._start_event.set()
+
     def _reset_turn_state(self) -> None:
         """Clear the per-turn content flags."""
         self._t1_has = False
@@ -761,7 +767,7 @@ class LiveAPIWorker:
                         await self.event_queue.put(
                             {"type": "live_api_status", "connected": False, "state": "disconnected"}
                         )
-                        if self._paused and not self._restart_requested:
+                        if self._intentional_stop:
                             self._start_event.clear()
                         print("Live API session closed.")
 

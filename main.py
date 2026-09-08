@@ -345,6 +345,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # New browser connection = new client session (fresh uid, seq resets to 1).
     # seq then accumulates across turns and Start/Stop until the next connect.
     liveapiworker.begin_client_session()
+    liveapiworker.ensure_connected()
 
     # Send the current Live API connection state immediately so the client
     # can render the status indicator without waiting for the next change.
