@@ -309,6 +309,14 @@ async def _stream_events_to_client(websocket: WebSocket) -> None:
                     })
                 )
 
+            elif event_type == "session_expired":
+                await websocket.send_text(
+                    json.dumps({
+                        "kind": "session_expired",
+                        "message": event.get("message", "Live API session reached 10-minute maximum limit."),
+                    })
+                )
+
         except Exception as exc:
             print(f"[stream_events] Error sending to client: {exc}")
         finally:
@@ -404,6 +412,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     await liveapiworker.start_session()
                 elif action == "stop_session":
                     await liveapiworker.stop_session()
+                elif action == "reset":
+                    await liveapiworker.reset_session()
+                elif action == "terminate_session":
+                    await liveapiworker.terminate_session()
                 elif action == "set_mode":
                     mode = message.get("mode")
                     if mode:

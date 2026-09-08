@@ -293,6 +293,51 @@ class LiveAPIWorker:
         self._stopped_at = time.monotonic()
         print("Pause (session kept alive for instant resume).")
 
+    async def reset_session(self) -> None:
+        """Disconnect existing session, clear all queues, and start a fresh Live API connection."""
+        print("Resetting Live API session and starting a new connection...")
+        self.begin_client_session()
+
+        # Drain audio input queue
+        while not self._audio_input_queue.empty():
+            try:
+                self._audio_input_queue.get_nowait()
+                self._audio_input_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        # Drain event queue
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+                self.event_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        await self.event_queue.put({
+            "type": "session_cleared",
+            "session_uid": self.session_uid,
+            "mode": self.mode,
+            "model": self.model_id,
+        })
+
+        self._paused = False
+        self._restart_requested = True
+        self._intentional_stop = False
+        self._start_event.set()
+        if self._active_receiver and not self._active_receiver.done():
+            self._active_receiver.cancel()
+
+    async def terminate_session(self) -> None:
+        """Explicitly terminate the Live API session when 10 minutes is due."""
+        print("10-minute session limit reached — terminating session.")
+        self._paused = True
+        self._intentional_stop = True
+        self._restart_requested = False
+        self._start_event.clear()
+        if self._active_receiver and not self._active_receiver.done():
+            self._active_receiver.cancel()
+
     @property
     def model_id(self) -> str:
         """Return the active model ID."""
@@ -541,6 +586,23 @@ class LiveAPIWorker:
                     self._active_receiver.cancel()  # breaks run() out of the session
                 return
 
+    async def _session_limit_watcher(self) -> None:
+        """Terminates session when 10 minutes (600s) have elapsed."""
+        try:
+            await asyncio.sleep(600)
+            print("10-minute session limit reached. Terminating connection...")
+            self._intentional_stop = True
+            self._restart_requested = False
+            self._start_event.clear()
+            await self.event_queue.put({
+                "type": "session_expired",
+                "message": "Live API session reached 10-minute maximum limit."
+            })
+            if self._active_receiver and not self._active_receiver.done():
+                self._active_receiver.cancel()
+        except asyncio.CancelledError:
+            pass
+
     async def _receiver_task(self, session) -> None:
         """Receive one batch of messages from the API session and push events
         onto the event queue.
@@ -730,6 +792,11 @@ class LiveAPIWorker:
                         self._idle_watcher(), name="idle-watcher"
                     )
 
+                    # 10-minute session limit watcher: terminates connection at 10 minutes.
+                    session_limit_task = asyncio.create_task(
+                        self._session_limit_watcher(), name="session-limit-watcher"
+                    )
+
                     # ---- Receiver supervisor ----
                     # A dedicated supervisor task keeps a _receiver_task always
                     # running: the instant one finishes (a turn ends) it spawns
@@ -747,11 +814,11 @@ class LiveAPIWorker:
                             raise
                         # Otherwise this was just a child task cancellation (session recycled or idle closed)
                     finally:
-                        # Tear down the idle watcher, supervisor and receiver.
-                        for task in (idle_task, self._active_receiver, self._current_receiver):
+                        # Tear down the idle watcher, session limit watcher, supervisor and receiver.
+                        for task in (idle_task, session_limit_task, self._active_receiver, self._current_receiver):
                             if task and not task.done():
                                 task.cancel()
-                        pending = [t for t in (idle_task, self._active_receiver, self._current_receiver) if t]
+                        pending = [t for t in (idle_task, session_limit_task, self._active_receiver, self._current_receiver) if t]
                         if pending:
                             await asyncio.gather(*pending, return_exceptions=True)
                         # Stop the sender via sentinel.

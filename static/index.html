@@ -147,7 +147,7 @@
     border-color: var(--primary); box-shadow: 0 0 0 2px rgba(11, 87, 208, 0.2);
   }
 
-  /* Start / Stop button (M3 Filled Pill) */
+  /* Action button (M3 Filled Pill) */
   button {
     border: none; border-radius: 20px; padding: 8px 20px; font-size: 13px; font-weight: 500;
     cursor: pointer; color: #fff; background: var(--primary); font-family: 'Google Sans', sans-serif;
@@ -155,16 +155,24 @@
     gap: 6px; justify-content: center;
   }
   button:hover { background: var(--primary-hover); box-shadow: var(--shadow-md); }
-  button.rec { background: var(--primary); }
-  button.rec:hover { background: var(--primary-hover); }
-  button.rec.recording {
-    background: var(--danger); box-shadow: 0 1px 3px 0 rgba(179,38,30,0.4);
-    animation: pulse-red 2s infinite ease-in-out;
+  button.reset-btn {
+    background: var(--primary);
+    padding: 8px 18px;
+    font-weight: 500;
   }
-  button.rec.recording:hover { background: var(--danger-hover); }
-  @keyframes pulse-red {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(217, 48, 37, 0.4); }
-    50% { box-shadow: 0 0 0 8px rgba(217, 48, 37, 0); }
+  button.reset-btn:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+  }
+  button.reset-btn:active {
+    transform: translateY(0);
+  }
+  button.reset-btn.spinning svg {
+    animation: spin-icon 0.6s linear infinite;
+  }
+  @keyframes spin-icon {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
   button:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 
@@ -366,7 +374,12 @@
       </div>
 
       <div class="action-wrap">
-        <button id="recBtn" class="rec">▶ Start</button>
+        <button id="resetBtn" class="reset-btn" title="Disconnect existing connection, clear content, and start a new connection">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+          </svg>
+          Reset
+        </button>
       </div>
     </div>
   </section>
@@ -722,8 +735,17 @@ function connectWS() {
       if (msg.live_api_status.state === 'connected') {
         startCountdown();
       } else {
-        stopCountdown();
+        if (remainingSeconds <= 0) {
+          // Keep showing 10m Due / expired
+        } else {
+          stopCountdown();
+        }
       }
+    } else if (msg.kind === 'session_expired') {
+      onSessionExpired();
+    } else if (msg.kind === 'session_cleared') {
+      if (msg.session_uid) currentSessionUid = msg.session_uid;
+      clearBottomInfo();
     }
   };
 }
@@ -743,7 +765,11 @@ function updateTimerDisplay() {
   const timerEl = $('sessionTimer');
   const badgeEl = $('timerBadge');
   if (timerEl) {
-    timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    if (remainingSeconds <= 0) {
+      timerEl.textContent = '00:00 (10m Due)';
+    } else {
+      timerEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
   }
   if (badgeEl) {
     if (remainingSeconds <= 60) {
@@ -752,6 +778,19 @@ function updateTimerDisplay() {
       badgeEl.classList.remove('warning');
     }
   }
+}
+
+function onSessionExpired() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  remainingSeconds = 0;
+  updateTimerDisplay();
+  setDot('apiDot', 'disconnected');
+  stopRecording();
+  send({ action: 'terminate_session' });
+  console.log('Live API connection terminated: 10 minutes session limit reached.');
 }
 
 function startCountdown() {
@@ -764,9 +803,8 @@ function startCountdown() {
   countdownInterval = setInterval(() => {
     remainingSeconds--;
     if (remainingSeconds <= 0) {
-      remainingSeconds = 0;
-      clearInterval(countdownInterval);
-      countdownInterval = null;
+      onSessionExpired();
+      return;
     }
     updateTimerDisplay();
   }, 1000);
@@ -779,8 +817,6 @@ function stopCountdown() {
   }
   remainingSeconds = 10 * 60;
   updateTimerDisplay();
-  const badgeEl = $('timerBadge');
-  if (badgeEl) badgeEl.style.display = 'none';
 }
 
 // ---------------- Data-contract handling ----------------
@@ -965,8 +1001,6 @@ async function startRecording() {
   sendLanguages();
   send({ action: 'start_session' });
   recording = true;
-  const btn = $('recBtn');
-  btn.textContent = '■ Stop'; btn.classList.add('recording');
 }
 
 function stopRecording() {
@@ -976,21 +1010,49 @@ function stopRecording() {
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
   recording = false;
-  const btn = $('recBtn');
-  btn.textContent = '▶ Start'; btn.classList.remove('recording');
 }
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-// ---------------- UI wiring ----------------
-$('recBtn').onclick = async () => {
+// ---------------- Reset Action ----------------
+async function handleReset() {
+  const btn = $('resetBtn');
+  if (btn) btn.classList.add('spinning');
+  console.log('[Reset] Disconnecting existing session, clearing content, starting new connection...');
+
   try {
-    if (!recording) await startRecording(); else stopRecording();
+    // 1. Tell server to disconnect existing session and start fresh connection
+    send({ action: 'reset' });
+
+    // 2. Clear all content and bottom displays
+    clearBottomInfo();
+    currentSessionUid = 'reset-' + Date.now();
+
+    // 3. Restart 10-minute session countdown
+    stopCountdown();
+    startCountdown();
+
+    // 4. Send updated language config
+    sendLanguages();
+
+    // 5. Ensure recording / audio capture is active
+    if (!recording) {
+      await startRecording();
+    }
   } catch (err) {
-    alert('Microphone error: ' + err.message);
+    console.error('Reset error:', err);
+  } finally {
+    setTimeout(() => {
+      if (btn) btn.classList.remove('spinning');
+    }, 500);
   }
+}
+
+// ---------------- UI wiring ----------------
+$('resetBtn').onclick = async () => {
+  await handleReset();
 };
 
 function sendLanguages() {
@@ -1050,7 +1112,26 @@ $('toggleRaw').onclick = () => {
     console.error('Failed to load config:', err);
   }
   connectWS();
+  startCountdown();
+
+  // Attempt auto-start audio recording on load
+  try {
+    await startRecording();
+  } catch (err) {
+    console.log('Microphone auto-capture waiting for user interaction/permission:', err);
+  }
 })();
+
+// Fallback user gesture to enable audio/mic if browser restricts autoplay on page load
+window.addEventListener('click', async () => {
+  if (!recording && remainingSeconds > 0) {
+    try {
+      await startRecording();
+    } catch (e) {
+      console.warn('Mic auto-start on gesture:', e);
+    }
+  }
+}, { once: true });
 </script>
 </body>
 </html>
