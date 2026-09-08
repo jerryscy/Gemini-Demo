@@ -510,7 +510,11 @@ function populateModelSelect() {
   }
 }
 
+let currentSessionUid = null;
+
 function selectModel(modelId, notifyServer = true) {
+  clearBottomInfo();
+  currentSessionUid = 'invalidated-' + Date.now();
   currentModel = modelId;
   const select = $('modelSelect');
   select.value = modelId;
@@ -536,14 +540,17 @@ function clearBottomInfo() {
   if (rawLog) rawLog.textContent = '';
 }
 
+function switchMode(mode) {
+  clearBottomInfo();
+  currentSessionUid = 'invalidated-' + Date.now();
+  setMode(mode, false, true);
+}
+
 function setMode(mode, fromServer = false, updateModel = true) {
-  const previousMode = currentMode;
   currentMode = mode;
 
-  // Once tab changes, clear the bottom information
-  if (previousMode && previousMode !== mode) {
-    clearBottomInfo();
-  }
+  // Always clear bottom info on mode change
+  clearBottomInfo();
 
   $('modeTranslateBtn').classList.toggle('active', mode === 'translation');
   $('modeTranslateBtn').setAttribute('aria-selected', mode === 'translation' ? 'true' : 'false');
@@ -685,12 +692,25 @@ function connectWS() {
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.kind === 'data') {
       handleData(msg.data);
+    } else if (msg.kind === 'session_cleared') {
+      currentSessionUid = msg.session_uid;
+      clearBottomInfo();
+      if (msg.model) {
+        currentModel = msg.model;
+        $('modelSelect').value = msg.model;
+        $('modelName').textContent = msg.model;
+      }
+      if (msg.mode) setMode(msg.mode, true, false);
     } else if (msg.kind === 'model_updated') {
+      if (msg.session_uid) currentSessionUid = msg.session_uid;
+      clearBottomInfo();
       currentModel = msg.model;
       $('modelSelect').value = msg.model;
       $('modelName').textContent = msg.model;
       if (msg.mode) setMode(msg.mode, true, false);
     } else if (msg.kind === 'mode_updated') {
+      if (msg.session_uid) currentSessionUid = msg.session_uid;
+      clearBottomInfo();
       currentModel = msg.model;
       $('modelSelect').value = msg.model;
       $('modelName').textContent = msg.model;
@@ -765,6 +785,11 @@ function stopCountdown() {
 
 // ---------------- Data-contract handling ----------------
 function handleData(d) {
+  // Discard messages from previous session if session_uid has changed
+  if (currentSessionUid && d.uid && d.uid !== currentSessionUid) {
+    return;
+  }
+
   const key = `${d.seq}-${d.type}`;
   const finished = (d.finished === true || d.finished === 'true');
 
@@ -1002,8 +1027,8 @@ $('modelSelect').onchange = (e) => {
   selectModel(e.target.value, true);
 };
 
-$('modeTranslateBtn').onclick = () => setMode('translation');
-$('modeTranscribeBtn').onclick = () => setMode('transcription');
+$('modeTranslateBtn').onclick = () => switchMode('translation');
+$('modeTranscribeBtn').onclick = () => switchMode('transcription');
 
 $('playToggle').onchange = (e) => {
   send({ action: 'set_audio_output', enabled: e.target.checked });

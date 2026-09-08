@@ -298,6 +298,16 @@ async def _stream_events_to_client(websocket: WebSocket) -> None:
                     })
                 )
 
+            elif event_type == "session_cleared":
+                await websocket.send_text(
+                    json.dumps({
+                        "kind": "session_cleared",
+                        "mode": event.get("mode"),
+                        "model": event.get("model"),
+                        "session_uid": event.get("session_uid"),
+                    })
+                )
+
         except Exception as exc:
             print(f"[stream_events] Error sending to client: {exc}")
         finally:
@@ -401,6 +411,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "kind": "mode_updated",
                                 "mode": liveapiworker.mode,
                                 "model": liveapiworker.model_id,
+                                "session_uid": liveapiworker.session_uid,
                             })
                         )
                 elif action == "set_model":
@@ -412,6 +423,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "kind": "model_updated",
                                 "mode": liveapiworker.mode,
                                 "model": liveapiworker.model_id,
+                                "session_uid": liveapiworker.session_uid,
                             })
                         )
                 elif action == "set_audio_output":

@@ -296,8 +296,8 @@ class LiveAPIWorker:
         return self.TRANSLATION_MODEL_ID
 
     async def set_model(self, model_id: str) -> None:
-        """Explicitly switch the model ID and adjust mode accordingly."""
-        if not model_id or getattr(self, "active_model_id", None) == model_id:
+        """Explicitly switch the model ID and reconnect Live API immediately."""
+        if not model_id:
             return
         print(f"Setting active model from {self.model_id} to {model_id}...")
         self.active_model_id = model_id
@@ -307,16 +307,40 @@ class LiveAPIWorker:
             self.mode = "translation"
         self.config = self._build_config()
         print(f"Switched model to {self.model_id} (Mode: {self.mode})")
-        if self.session is not None:
-            if self._paused:
-                print("Closing idle Live API session to apply new model on next start...")
-                self._intentional_stop = True
-                self._start_event.clear()
-            else:
-                print("Restarting Live API session to apply new model...")
-                self._restart_requested = True
-            if self._active_receiver and not self._active_receiver.done():
-                self._active_receiver.cancel()
+
+        # Start a fresh client session and sequence
+        self.begin_client_session()
+
+        # Drain audio queue so stale audio from previous model is discarded
+        while not self._audio_input_queue.empty():
+            try:
+                self._audio_input_queue.get_nowait()
+                self._audio_input_queue.task_done()
+            except (asyncio.QueueEmpty, ValueError):
+                break
+
+        # Drain event queue so in-flight events from previous model are discarded
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+                self.event_queue.task_done()
+            except (asyncio.QueueEmpty, ValueError):
+                break
+
+        # Notify frontend to clear UI
+        await self.event_queue.put({
+            "type": "session_cleared",
+            "mode": self.mode,
+            "model": self.model_id,
+            "session_uid": self.session_uid,
+        })
+
+        # Always reconnect the Live API session immediately
+        self._restart_requested = True
+        self._intentional_stop = False
+        self._start_event.set()
+        if self._active_receiver and not self._active_receiver.done():
+            self._active_receiver.cancel()
 
     def _build_config(self) -> LiveConnectConfig:
         """Construct the LiveConnectConfig for Gemini 3.5 Live models."""
@@ -361,11 +385,9 @@ class LiveAPIWorker:
             )
 
     async def set_mode(self, mode: str) -> None:
-        """Switch between 'translation' and 'transcription'."""
+        """Switch between 'translation' and 'transcription' and reconnect Live API immediately."""
         if mode not in ("translation", "transcription"):
             print(f"Unknown mode requested: {mode}")
-            return
-        if self.mode == mode and getattr(self, "active_model_id", None) is None:
             return
         print(f"Switching mode from {self.mode} to {mode}...")
         self.mode = mode
@@ -373,16 +395,40 @@ class LiveAPIWorker:
         self.active_model_id = self.TRANSCRIPTION_MODEL_ID if mode == "transcription" else self.TRANSLATION_MODEL_ID
         self.config = self._build_config()
         print(f"Switched mode to {self.mode} (Model: {self.model_id})")
-        if self.session is not None:
-            if self._paused:
-                print("Closing idle Live API session to apply new mode on next start...")
-                self._intentional_stop = True
-                self._start_event.clear()
-            else:
-                print("Restarting Live API session to apply new mode...")
-                self._restart_requested = True
-            if self._active_receiver and not self._active_receiver.done():
-                self._active_receiver.cancel()
+
+        # Start a fresh client session and sequence
+        self.begin_client_session()
+
+        # Drain audio queue so stale audio from previous mode is discarded
+        while not self._audio_input_queue.empty():
+            try:
+                self._audio_input_queue.get_nowait()
+                self._audio_input_queue.task_done()
+            except (asyncio.QueueEmpty, ValueError):
+                break
+
+        # Drain event queue so in-flight events from previous mode are discarded
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+                self.event_queue.task_done()
+            except (asyncio.QueueEmpty, ValueError):
+                break
+
+        # Notify frontend to clear UI
+        await self.event_queue.put({
+            "type": "session_cleared",
+            "mode": self.mode,
+            "model": self.model_id,
+            "session_uid": self.session_uid,
+        })
+
+        # Always reconnect the Live API session immediately
+        self._restart_requested = True
+        self._intentional_stop = False
+        self._start_event.set()
+        if self._active_receiver and not self._active_receiver.done():
+            self._active_receiver.cancel()
 
     async def set_language(self, source: str, target: str,
                            source_code: Optional[str] = None,
