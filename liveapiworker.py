@@ -101,7 +101,8 @@ class LiveAPIWorker:
 
     TRANSLATION_MODEL_ID = os.getenv("TRANSLATION_MODEL_ID", "gemini-3.5-live-translate-preview")
     TRANSCRIPTION_MODEL_ID = os.getenv("TRANSCRIPTION_MODEL_ID", "gemini-3.5-transcribe-live-preview")
-    MODEL_ID = TRANSLATION_MODEL_ID
+    DEFAULT_MODE = os.getenv("DEFAULT_MODE", "transcription")
+    MODEL_ID = TRANSCRIPTION_MODEL_ID
 
     def __init__(self, source_language: str = "Chinese (Simplified)",
                  target_language: str = "English",
@@ -123,11 +124,11 @@ class LiveAPIWorker:
             location=location,
         )
 
-        # Mode: 'translation' (Live Translation) or 'transcription' (Live Transcription)
-        self.mode = mode or os.getenv("DEFAULT_MODE", "translation")
+        # Mode: 'transcription' (Live Transcription) or 'translation' (Live Translation)
+        self.mode = mode or os.getenv("DEFAULT_MODE", "transcription")
         if self.mode not in ("translation", "transcription"):
-            self.mode = "translation"
-        self.active_model_id: Optional[str] = None
+            self.mode = "transcription"
+        self.active_model_id = self.TRANSCRIPTION_MODEL_ID if self.mode == "transcription" else self.TRANSLATION_MODEL_ID
 
         # Display name shown in the UI prompt (e.g. "English (United States)").
         self.source_language = source_language

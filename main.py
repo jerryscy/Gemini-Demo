@@ -26,6 +26,7 @@ DEFAULT_SOURCE_LANG_CODE = os.getenv("DEFAULT_SOURCE_LANG_CODE", "zh-Hans")
 DEFAULT_TARGET_LANG_CODE = os.getenv("DEFAULT_TARGET_LANG_CODE", "en")
 DEFAULT_SOURCE_LANG = os.getenv("DEFAULT_SOURCE_LANG") or name_for_code(DEFAULT_SOURCE_LANG_CODE)
 DEFAULT_TARGET_LANG = os.getenv("DEFAULT_TARGET_LANG") or name_for_code(DEFAULT_TARGET_LANG_CODE)
+DEFAULT_MODE = os.getenv("DEFAULT_MODE", "transcription")
 
 liveapiworker: Optional[LiveAPIWorker] = None
 _worker_task: Optional[asyncio.Task] = None
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         DEFAULT_TARGET_LANG,
         source_language_code=DEFAULT_SOURCE_LANG_CODE,
         target_language_code=DEFAULT_TARGET_LANG_CODE,
+        mode=DEFAULT_MODE,
     )
 
     def _on_worker_done(t):
@@ -222,22 +224,22 @@ async def get_config(request: Request):
     else:
         user_name = None
 
-    current_mode = liveapiworker.mode if liveapiworker else "translation"
-    current_model = liveapiworker.model_id if liveapiworker else LiveAPIWorker.TRANSLATION_MODEL_ID
+    current_mode = liveapiworker.mode if liveapiworker else DEFAULT_MODE
+    current_model = liveapiworker.model_id if liveapiworker else LiveAPIWorker.TRANSCRIPTION_MODEL_ID
     source_codes = liveapiworker.source_language_codes if liveapiworker else [DEFAULT_SOURCE_LANG_CODE]
 
     available_models = [
-        {
-            "id": LiveAPIWorker.TRANSLATION_MODEL_ID,
-            "name": "Gemini 3.5 Live Translate (Preview)",
-            "mode": "translation",
-            "description": "Real-time speech-to-speech translation (Preview)",
-        },
         {
             "id": LiveAPIWorker.TRANSCRIPTION_MODEL_ID,
             "name": "Gemini 3.5 Live Transcribe (Preview)",
             "mode": "transcription",
             "description": "Real-time speech-to-text transcription (Preview)",
+        },
+        {
+            "id": LiveAPIWorker.TRANSLATION_MODEL_ID,
+            "name": "Gemini 3.5 Live Translate (Preview)",
+            "mode": "translation",
+            "description": "Real-time speech-to-speech translation (Preview)",
         },
     ]
 
@@ -250,16 +252,16 @@ async def get_config(request: Request):
             "mode": current_mode,
             "modes": [
                 {
-                    "id": "translation",
-                    "name": "Live Translation",
-                    "model": LiveAPIWorker.TRANSLATION_MODEL_ID,
-                    "description": "Real-time speech-to-speech translation",
-                },
-                {
                     "id": "transcription",
                     "name": "Live Transcription",
                     "model": LiveAPIWorker.TRANSCRIPTION_MODEL_ID,
                     "description": "Real-time speech-to-text transcription",
+                },
+                {
+                    "id": "translation",
+                    "name": "Live Translation",
+                    "model": LiveAPIWorker.TRANSLATION_MODEL_ID,
+                    "description": "Real-time speech-to-speech translation",
                 },
             ],
             "model": current_model,
