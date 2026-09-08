@@ -93,7 +93,8 @@ _raw_enable = os.getenv("ENABLE_OAUTH", "")
 if _raw_enable:
     ENABLE_OAUTH = _raw_enable.lower() in ("1", "true", "yes", "on")
 else:
-    ENABLE_OAUTH = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+    # Default to OAuth on Cloud Run (where K_SERVICE is set); allow local dev without OAuth by default
+    ENABLE_OAUTH = bool(os.getenv("K_SERVICE") and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
 ALLOWED_EMAILS = [
     email.strip().lower()
