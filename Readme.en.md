@@ -27,20 +27,22 @@
 
 | | Feature | Description |
 |---|---|---|
-| 🔀 | **Mode Selector** | Toggle between **Live Translation** (`gemini-3.5-live-translate-preview`) and **Live Transcription** (`gemini-3.5-transcribe-live-preview`) |
-| 🎤 | **Real-time audio streaming** | MediaStream API + AudioWorklet captures mic audio at 16 kHz mono PCM in clean 100ms packets |
+| 📝 | **Default Live Transcription** | Launches in **Live Transcription** (`gemini-3.5-transcribe-live-preview`) by default, with seamless one-click switching to **Live Translation** (`gemini-3.5-live-translate-preview`) |
+| ⚡ | **Auto-Connect on Page Load** | Automatically connects WebSocket and initializes the Gemini Live API session and mic streaming on page load |
+| ↻ | **One-Click Reset** | Replaces Start/Stop toggles; clicking **Reset** disconnects the current session, flushes queues, clears content, and starts a fresh connection instantly |
+| ⏱️ | **10-Minute Session Lifecycle** | Visual 10-minute session countdown timer; automatically and cleanly terminates when the Gemini Live API 10-minute maximum limit is reached |
+| 📊 | **Consolidated Result Card** | Single unified result view: shows input transcription in Transcription mode, and translated output in Translation mode |
+| 🔄 | **Tab-Switch Auto-Reconnection** | Switching tabs automatically cleans up old state, clears previous logs, and establishes the correct Live model session |
+| 🎤 | **High-Fidelity Audio Streaming** | MediaStream API + AudioWorklet captures mic audio at 16 kHz mono PCM in regular 100ms packets |
 | 🌍 | **78 Languages** | Full Gemini 3.5 Live language catalog using standard BCP-47 codes (e.g., `zh-Hans`, `zh-Hant`, `en`, `es`, `ja`) |
 | 🌐 | **Multi-Language Input Detection** | Select one or multiple source languages for speech recognition and language identification |
 | 🗣️ | **Translated Speech Playback** | 24 kHz 16-bit linear PCM audio streamed to the browser with Web Audio API playback |
-| 🔒 | **Context-Aware UI Controls** | Target language and speech playback options automatically disable when Live Transcription is active |
 | 🎧 | **Browser Echo/Noise Suppression** | Built-in browser `echoCancellation`, `noiseSuppression`, and `autoGainControl` minimize feedback and distortion |
 | 🎭 | **Affective Dialog & Voice Options** | Synthesized translations mirror speaker emotion via `enable_affective_dialog` |
-| ⏱️ | **Server-side VAD** | Automatic voice activity detection with tuned sensitivity for low-latency interpretation |
 | 🚦 | **No Mid-Turn Interruption** | `activity_handling = NO_INTERRUPTION` prevents background audio from truncating in-progress translations |
 | 🧠 | **Context Window Compression** | Sliding token window prevents session drops during extended conversations |
-| 🔌 | **Live Connection Indicator** | Real-time status badge showing Browser ↔ Backend ↔ Live API states |
-| ⏸️ | **Instant Resume on Stop/Start** | Stopping pauses audio while preserving the active session; resumes instantly without reconnect delays |
-| 🎨 | **Zero-Build Frontend** | Clean, responsive UI built with vanilla JavaScript and modern CSS (no bundlers required) |
+| 🔌 | **Live Connection Indicator** | Real-time status indicators showing Browser ↔ Backend ↔ Live API states |
+| 🚀 | **Production-Ready Deploy Scripts** | Pre-built scripts (`deploy.sh`, `deploy_no_auth.sh`, `deploy_with_oauth.sh`) for Google Cloud Run deployment |
 
 ---
 
@@ -56,26 +58,26 @@
    ▼
 ⚙️  FastAPI backend (main.py)       ── Two-way message router
    │     ├─ audio chunks → LiveAPIWorker.send_audio_data()
-   │     └─ start/stop/mode/language controls → LiveAPIWorker lifecycle
+   │     └─ reset / mode / language controls → LiveAPIWorker lifecycle
    ▼
 🤖 LiveAPIWorker (liveapiworker.py) ── Live API session manager (Vertex AI enterprise=True)
    │
-   ├── [Mode: Translation]   ── gemini-3.5-live-translate-preview (Source STT + Translation + Audio)
-   └── [Mode: Transcription] ── gemini-3.5-transcribe-live-preview (Source STT)
+   ├── [Default Mode: Transcription] ── gemini-3.5-transcribe-live-preview (response_modalities=["TEXT"])
+   └── [Switched Mode: Translation]   ── gemini-3.5-live-translate-preview (response_modalities=["AUDIO"])
    │
    │  WebSocket return stream
    ▼
-🌐 Browser (index.html)             ── Renders real-time text + plays 24 kHz audio via Web Audio API
+🌐 Browser (index.html)             ── Consolidated result view rendering + Web Audio API 24 kHz playback
 ```
 
 ### Step-by-Step Flow
 
-1. **Audio Capture**: The browser accesses the microphone at 16 kHz mono with hardware echo cancellation, noise suppression, and auto gain control.
+1. **Auto-Connect & Capture**: On page load, the browser immediately establishes WebSocket and Live API connections, opening the microphone at 16 kHz mono with hardware echo cancellation, noise suppression, and auto gain control.
 2. **Chunking & Quantization**: `AudioWorklet` (with inline Blob fallback) buffers 100ms of audio (1,600 samples) and converts 32-bit float samples to 16-bit linear PCM.
-3. **Session Signaling**: Pressing **Start** initializes the WebSocket session and triggers `LiveAPIWorker` to establish a persistent connection with Google's Gemini Live API.
-4. **Vertex AI Processing**: Audio is streamed in real time to the selected Gemini 3.5 model in the `global` region.
-5. **Streamed Return**: The backend receives translated audio and synchronized transcription deltas, forwarding them immediately to the browser.
-6. **Playback & Rendering**: The frontend accumulates text deltas into chat bubbles and decodes/schedules 24 kHz audio buffers for seamless audio playback.
+3. **Vertex AI Processing**: Audio is streamed in real time to the selected Gemini 3.5 model in the `global` region.
+4. **Streamed Return**: The backend receives translated audio and synchronized transcription deltas, forwarding them immediately to the browser.
+5. **Playback & Rendering**: The frontend accumulates text deltas into chat bubbles and decodes/schedules 24 kHz audio buffers for seamless audio playback.
+6. **10-Minute Expiry & Reset**: A 10-minute countdown terminates the session when due. Clicking **`↻ Reset`** disconnects the session, clears past text, resets the timer to `10:00`, and starts a fresh connection.
 
 ---
 
@@ -85,11 +87,11 @@ The application runs as a lightweight, single-process service:
 
 | Component | Technology | Key Files | Description |
 |---|---|---|---|
-| **Frontend** | Vanilla JS · Web Audio API · AudioWorklet | `static/index.html`, `static/audio-processor.js` | Audio capture, delta assembly, 24 kHz playback |
-| **Backend Router** | Python ≥3.10 · FastAPI · WebSockets | `main.py` | HTTP static file serving, WebSocket endpoint, auth |
-| **Live Worker** | `google-genai` (SDK ≥2.22.0) | `liveapiworker.py` | Vertex AI Live API connection, session lifecycle |
+| **Frontend** | Vanilla JS · Web Audio API · AudioWorklet | `static/index.html`, `static/audio-processor.js` | Auto-capture, delta assembly, 24 kHz playback, 10m timer & Reset |
+| **Backend Router** | Python ≥3.10 · FastAPI · WebSockets | `main.py` | HTTP static file serving, WebSocket endpoint, OAuth auth support |
+| **Live Worker** | `google-genai` (SDK ≥2.22.0) | `liveapiworker.py` | Vertex AI Live API connection, 10-minute session watchdog & reset logic |
 | **Language Metadata** | Python dictionary & BCP-47 codes | `languages.py` | 78 supported Gemini 3.5 Live languages |
-| **AI Models** | Vertex AI (`enterprise=True`) | Google Gemini Live API | `gemini-3.5-live-translate-preview`<br>`gemini-3.5-transcribe-live-preview` |
+| **AI Models** | Vertex AI (`enterprise=True`) | Google Gemini Live API | `gemini-3.5-transcribe-live-preview`<br>`gemini-3.5-live-translate-preview` |
 
 ---
 
@@ -106,8 +108,8 @@ The application runs as a lightweight, single-process service:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/jerryscy/Live-translation-with-Gemini-Live-API-Native-Audio.git
-cd Live-translation-with-Gemini-Live-API-Native-Audio
+git clone https://github.com/jerryscy/Gemini-Demo.git
+cd Gemini-Demo
 
 # 2. Create virtual environment & install dependencies
 python3 -m venv .venv-app
@@ -141,7 +143,8 @@ GOOGLE_CLOUD_LOCATION="global"  # Gemini 3.5 Live models require "global"
 # Models and Mode
 TRANSLATION_MODEL_ID="gemini-3.5-live-translate-preview"
 TRANSCRIPTION_MODEL_ID="gemini-3.5-transcribe-live-preview"
-DEFAULT_MODE="translation"
+DEFAULT_MODE="transcription"
+LIVE_API_MODEL="gemini-3.5-transcribe-live-preview"
 
 # Default Languages (BCP-47)
 DEFAULT_SOURCE_LANG="Chinese (Simplified)"
@@ -150,8 +153,8 @@ DEFAULT_TARGET_LANG="English"
 DEFAULT_TARGET_LANG_CODE="en"
 
 # Session Lifecycle
-IDLE_CLOSE_SECONDS="30"  # Keep-alive window when paused before disconnecting
-DEBUG_LIVE_API="false"   # Set to true for verbose Live API timing logs
+IDLE_CLOSE_SECONDS="600"  # Keep-alive window and 10-minute (600s) session cap
+DEBUG_LIVE_API="false"    # Set to true for verbose Live API timing logs
 ```
 
 ### 2. Google Cloud Authentication
@@ -179,33 +182,42 @@ Or run directly with `uvicorn`:
 
 ### Web Interface Guide
 
-1. **Select Mode**:
+1. **Auto-Connect**:
+   - On page load, the **Server** and **Live API** indicators turn green automatically.
+   - Microphone capture begins, and the session timer counts down from `10:00`.
+2. **Select Mode**:
+   - **Live Transcription (Default)**: High-accuracy speech-to-text. The result card displays input transcriptions.
    - **Live Translation**: Speaks and translates input into the target language.
-   - **Live Transcription**: Transcribes speech into text without translation or audio synthesis.
-2. **Configure Languages**:
-   - **Input Language**: Check one or more source languages (e.g. `zh-Hans`, `en`).
+   - *Changing tabs automatically reconnects and clears previous logs.*
+3. **Configure Languages**:
+   - **Input Language**: Select one or more source languages (e.g. `zh-Hans`, `en`).
    - **Target Language**: Select output language (active in Translation mode).
-3. **Start Translating**:
-   - Click **▶ Start** and speak into your microphone.
-   - View real-time source text (left column) and translation (right column).
-   - Toggle **Play audio** to hear translated speech.
-4. **Pause and Resume**:
-   - Click **⏹ Stop** to pause audio transmission.
-   - Click **▶ Start** within 30 seconds to resume immediately without waiting for a new connection.
+4. **One-Click Reset**:
+   - Click **`↻ Reset`** at any time to disconnect the current session, clear content, reset the 10-minute timer, and reconnect immediately.
+5. **10-Minute Expiry**:
+   - When the 10-minute window expires, the timer shows `00:00 (10m Due)` and the connection closes gracefully. Click **`↻ Reset`** to start a new session.
 
 ---
 
 ## 📦 Data Contract
 
-Client and server communicate over WebSocket (`ws://127.0.0.1:8000/ws`):
+Client and server communicate via WebSocket (`ws://127.0.0.1:8000/ws`):
 
-### Text Messages (`{"kind": "data", "data": {...}}`)
+### Control Messages (Client $\rightarrow$ Server)
+
+```json
+{"action": "reset"}              // Disconnects existing session and connects fresh
+{"action": "terminate_session"}  // Cleanly terminates session on 10m expiry
+{"action": "set_mode", "mode": "transcription"} // Changes mode and reconnects
+```
+
+### Text Messages (Server $\rightarrow$ Client)
 
 ```json
 {
   "uid": "917289fa-4e13-492e-af0c-b33189798dae",
   "seq": 1,
-  "type": 2,
+  "type": 1,
   "delta": " The weather is very nice today.",
   "finished": false
 }
@@ -213,48 +225,79 @@ Client and server communicate over WebSocket (`ws://127.0.0.1:8000/ws`):
 
 | Field | Type | Description |
 |---|---|---|
-| `uid` | string | Unique client session identifier generated per connection |
-| `seq` | integer | Turn counter; increments sequentially on each finished utterance |
+| `uid` | string | Unique session identifier (refreshed on Reset) |
+| `seq` | integer | Turn counter, increments after each utterance |
 | `type` | integer | `1` = Source transcription, `2` = Translated text |
-| `delta` | string | Incremental text chunk received from Gemini Live API |
-| `finished` | boolean | `false` while speaker turn is active, `true` upon completion |
+| `delta` | string | Incremental text delta |
+| `finished` | boolean | Indicates whether the current turn is complete |
 
-### Binary Messages
-- **Upstream (Client $ightarrow$ Server)**: 16 kHz 16-bit linear PCM microphone chunks (~100ms).
-- **Downstream (Server $ightarrow$ Client)**: 24 kHz 16-bit linear PCM translated speech audio chunks.
+### Binary Audio Messages
+- **Upstream (Browser $\rightarrow$ Backend)**: 16 kHz 16-bit mono linear PCM (~100ms packets).
+- **Downstream (Backend $\rightarrow$ Browser)**: 24 kHz 16-bit mono linear PCM translated audio (Translation mode only).
 
 ---
 
-## 🧠 Key Live API Configuration
+## 🧠 Live API Model Configuration
 
-`LiveAPIWorker` configures the session specifically for low-latency interpretation:
+`liveapiworker.py` strictly aligns with the Gemini 3.5 Live API protocol:
 
-| Setting | Configuration | Purpose |
-|---|---|---|
-| `client` | `genai.Client(vertexai=True, enterprise=True, location="global")` | Connects to Vertex AI Gemini 3.5 Live endpoint |
-| `response_modalities` | `["AUDIO"]` | Receives synthesized speech audio alongside transcripts |
-| `translation_config` | `target_language`, `echo_target_language=False` | Configures target language; model remains silent if input matches target |
-| `input_audio_transcription` | `AudioTranscriptionConfig()` | Server-side automated speech-to-text with language ID |
-| `output_audio_transcription` | `AudioTranscriptionConfig()` | Synchronized transcript of generated speech output |
-| `activity_handling` | `NO_INTERRUPTION` | Prevents subsequent speech from cutting off in-progress translations |
-| `proactivity` | `proactive_audio=True` | Starts streaming speech translation as soon as sentence context allows |
-| `voice_config` | `prebuilt_voice_config={"voice_name": "puck"}` | 24 kHz natural voice synthesis |
+### 1. Live Transcription (`gemini-3.5-transcribe-live-preview`)
+```python
+types.LiveConnectConfig(
+    response_modalities=["TEXT"],
+    speech_config=types.SpeechConfig(
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="puck")
+        )
+    ),
+    input_audio_transcription=types.AudioTranscriptionConfig(
+        language_codes=source_language_codes  # Source language codes array
+    ),
+    enable_affective_dialog=True,
+)
+```
+
+### 2. Live Translation (`gemini-3.5-live-translate-preview`)
+```python
+types.LiveConnectConfig(
+    response_modalities=["AUDIO"],
+    speech_config=types.SpeechConfig(
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="puck")
+        )
+    ),
+    input_audio_transcription=types.AudioTranscriptionConfig(), # Without language_codes
+    output_audio_transcription=types.AudioTranscriptionConfig(
+        language_code=target_language_code # Shared with translation_config
+    ),
+    translation_config=types.LiveClientTranslationConfig(
+        target_language_code=target_language_code,
+        echo_target_language=True,
+    ),
+    activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    proactivity=types.ProactivityConfig(proactive_audio=True),
+    enable_affective_dialog=True,
+)
+```
 
 ---
 
 ## ☁️ Cloud Run Deployment
 
-Deployment helper scripts are provided in the repository:
+Scripts without hardcoded secrets are included for deployment:
 
-- **Public deployment (No OAuth)**:
+- **Unified Deployment Script**:
+  ```bash
+  ./deploy.sh
+  ```
+- **Public Service (No Authentication)**:
   ```bash
   ./deploy_no_auth.sh
   ```
-- **Protected deployment with Google OAuth**:
+- **Secured with Google OAuth**:
   ```bash
   ./deploy_with_oauth.sh
   ```
-
 ---
 
 ## 🛠️ Troubleshooting

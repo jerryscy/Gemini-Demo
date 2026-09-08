@@ -1,7 +1,14 @@
-# Environment variables
+# Environment variables & secrets
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*credential*.json
+*secret*.json
+*service_account*.json
+gcp-key*.json
+client_secret*.json
 
 # Python virtual environments
 myenv/

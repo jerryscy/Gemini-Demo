@@ -43,12 +43,13 @@ GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
 GOOGLE_CLOUD_LOCATION="global"
 TRANSLATION_MODEL_ID="gemini-3.5-live-translate-preview"
 TRANSCRIPTION_MODEL_ID="gemini-3.5-transcribe-live-preview"
-DEFAULT_MODE="translation"
+DEFAULT_MODE="transcription"
+LIVE_API_MODEL="gemini-3.5-transcribe-live-preview"
 DEFAULT_SOURCE_LANG="Chinese (Simplified)"
 DEFAULT_SOURCE_LANG_CODE="zh-Hans"
 DEFAULT_TARGET_LANG="English"
 DEFAULT_TARGET_LANG_CODE="en"
-IDLE_CLOSE_SECONDS="30"
+IDLE_CLOSE_SECONDS="600"
 DEBUG_LIVE_API="false"
 ```
 
@@ -77,17 +78,20 @@ Or:
 
 Open **`http://127.0.0.1:8000`** in your browser (Chrome or Edge recommended):
 
-1. **Mode Selector**:
+1. **Auto-Connect & Recording**:
+   - The page automatically connects to the server and Gemini Live API upon loading.
+   - Microphone capture starts immediately, and the 10-minute session countdown timer (`10:00`) starts ticking down.
+2. **Mode Selector**:
+   - **Live Transcription (Default)** (`gemini-3.5-transcribe-live-preview`): Real-time speech-to-text transcription. The unified result card displays source transcriptions.
    - **Live Translation** (`gemini-3.5-live-translate-preview`): Translates spoken audio to the chosen target language with real-time text and synthesized 24 kHz voice audio.
-   - **Live Transcription** (`gemini-3.5-transcribe-live-preview`): Real-time speech-to-text transcription. Target language selection and audio output are automatically disabled in this mode.
-2. **Language Configuration**:
+   - *Switching tabs automatically clears previous content and reconnects the Live session with the corresponding model.*
+3. **Language Configuration**:
    - Select one or multiple input languages (e.g. `zh-Hans`, `en`).
-   - Select target output language (78 supported BCP-47 standard languages).
-3. **Recording & Audio**:
-   - Click **▶ Start** and grant microphone permissions.
-   - Left column displays source speech transcription (type 1).
-   - Right column displays translated text (type 2).
-   - The **Play audio** toggle enables/disables real-time translated voice playback.
+   - Select target output language (active in Translation mode).
+4. **`↻ Reset` Button**:
+   - Click **`↻ Reset`** to disconnect the existing session, clear previous transcripts, reset the countdown timer back to `10:00`, and start a fresh session immediately.
+5. **10-Minute Expiry**:
+   - Sessions are capped at 10 minutes to respect Gemini Live API limits. When 10 minutes expire, the timer displays `00:00 (10m Due)` and terminates the connection. Click **`↻ Reset`** to initiate a new session.
 
 ---
 
@@ -103,7 +107,7 @@ Open **`http://127.0.0.1:8000`** in your browser (Chrome or Edge recommended):
   "finished": false
 }
 ```
-- `uid`: Unique client session ID generated per browser connection.
+- `uid`: Unique client session ID generated per session.
 - `seq`: Turn sequence counter that increments on turn completion.
 - `type`: `1` for source input transcript, `2` for translation.
 - `delta` / `text`: Incremental text chunk or cumulative transcript string.
@@ -111,12 +115,30 @@ Open **`http://127.0.0.1:8000`** in your browser (Chrome or Edge recommended):
 
 ### Binary Messages
 - **Client $\rightarrow$ Server**: 16 kHz 16-bit linear PCM microphone chunks (~100ms).
-- **Server $\rightarrow$ Client**: 24 kHz 16-bit linear PCM translated audio chunks.
+- **Server $\rightarrow$ Client**: 24 kHz 16-bit linear PCM translated audio chunks (Translation mode only).
 
 ---
 
-## 6. Session Lifecycle & Keep-Alive
+## 6. Session Lifecycle & Watchdog
 
-- Clicking **Stop** pauses audio transmission but retains the Live API session in an idle state.
-- Clicking **Start** within `IDLE_CLOSE_SECONDS` (default: 30s) resumes streaming instantly without reconnecting.
-- If idle beyond `IDLE_CLOSE_SECONDS`, the session is cleanly closed to prevent unnecessary billing, and the next **Start** automatically reconnects.
+- **10-Minute Hard Cap**: `liveapiworker.py` and frontend both enforce a 600-second (10-minute) session lifetime.
+- **Auto-Termination**: At 600 seconds, the backend closes the Live API receiver and client displays `00:00 (10m Due)`.
+- **Reset**: Clicking **`↻ Reset`** calls `worker.reset_session()`, discarding queues and reconnecting to Gemini Live API with a fresh session UID and timer.
+
+---
+
+## 7. Cloud Run Deployment
+
+Deploy with one command using the provided scripts:
+
+```bash
+# Public deployment
+./deploy.sh
+
+# Or unauthenticated public
+./deploy_no_auth.sh
+
+# Or OAuth protected
+./deploy_with_oauth.sh
+```
+
