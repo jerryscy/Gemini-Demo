@@ -347,17 +347,15 @@ class LiveAPIWorker:
             )
         else:
             # Live Translation (gemini-3.5-live-translate-preview)
-            input_transcription = (
-                AudioTranscriptionConfig(language_codes=self.source_language_codes)
-                if self.source_language_codes
-                else AudioTranscriptionConfig()
-            )
+            target_lang_code = norm_target or "en"
             return LiveConnectConfig(
                 response_modalities=["AUDIO"],
-                input_audio_transcription=input_transcription,
-                output_audio_transcription=AudioTranscriptionConfig(),
+                input_audio_transcription=AudioTranscriptionConfig(),
+                output_audio_transcription=AudioTranscriptionConfig(
+                    language_codes=[target_lang_code],
+                ),
                 translation_config=TranslationConfig(
-                    target_language_code=norm_target or "en",
+                    target_language_code=target_lang_code,
                     echo_target_language=False,
                 ),
             )
