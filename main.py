@@ -95,9 +95,22 @@ else:
 
 ALLOWED_EMAILS = [
     email.strip().lower()
-    for email in os.getenv("ALLOWED_EMAILS", "jerryscy@gmail.com").split(",")
+    for email in os.getenv("ALLOWED_EMAILS", "jerryscy@gmail.com,jerryscy@google.com").split(",")
     if email.strip()
 ]
+
+def is_allowed_user(email: Optional[str], hd: Optional[str] = None) -> bool:
+    if not email:
+        return False
+    email_clean = email.strip().lower()
+    if email_clean in ALLOWED_EMAILS:
+        return True
+    if ALLOWED_HD:
+        if email_clean.endswith(f"@{ALLOWED_HD}"):
+            return True
+        if hd and hd.strip().lower() == ALLOWED_HD:
+            return True
+    return False
 
 def _get_redirect_uri(request: Request) -> str:
     if configured := os.getenv("OAUTH_REDIRECT_URI"):
@@ -174,9 +187,8 @@ async def callback(request: Request, code: Optional[str] = None, error: Optional
         email = user_info.get("email", "").strip().lower()
         
         # Restrict login to authorized test users or domain
-        is_allowed_email = email in ALLOWED_EMAILS
-        is_allowed_hd = bool(ALLOWED_HD and (email.endswith(f"@{ALLOWED_HD}") or user_info.get("hd") == ALLOWED_HD))
-        if not email or (not is_allowed_email and not is_allowed_hd):
+        if not is_allowed_user(email, user_info.get("hd")):
+            print(f"[OAuth] Access denied for: {email} (hd: {user_info.get('hd')})")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied: {email} is not authorized for this application."
@@ -185,6 +197,7 @@ async def callback(request: Request, code: Optional[str] = None, error: Optional
         # Store identity in session
         request.session["email"] = email
         request.session["user_name"] = user_info.get("name", "User")
+        print(f"[OAuth] Successfully authenticated: {email}")
         
     return RedirectResponse(url="/")
 
@@ -203,7 +216,7 @@ async def get_config(request: Request):
     """Expose language list + defaults + mode + model state to the frontend."""
     if ENABLE_OAUTH:
         email = request.session.get("email")
-        if not email or email not in ALLOWED_EMAILS:
+        if not is_allowed_user(email):
             raise HTTPException(status_code=401, detail="Not authenticated")
         user_name = request.session.get("user_name", "User")
     else:
@@ -294,8 +307,10 @@ async def get(request: Request):
     """Serve the index page."""
     if ENABLE_OAUTH:
         email = request.session.get("email")
-        if not email or email not in ALLOWED_EMAILS:
+        if not is_allowed_user(email):
+            print(f"[Root] Redirecting to /login because session email '{email}' is not authorized")
             return RedirectResponse(url="/login")
+        print(f"[Root] Serving index page for authorized user: {email}")
     return FileResponse(
         "static/index.html",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -307,8 +322,8 @@ async def websocket_endpoint(websocket: WebSocket):
     # Retrieve the user's session and verify authentication if OAuth is enabled
     if ENABLE_OAUTH:
         email = websocket.session.get("email")
-        if not email or email not in ALLOWED_EMAILS:
-            print("[websocket] Rejecting unauthenticated WebSocket connection.")
+        if not is_allowed_user(email):
+            print(f"[websocket] Rejecting unauthenticated WebSocket connection for email '{email}'.")
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
