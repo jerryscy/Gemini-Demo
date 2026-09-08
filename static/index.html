@@ -449,8 +449,8 @@ let allLanguages = [];
 const selectedSourceCodes = new Set();
 
 // Track chat bubbles + accumulated text per (seq,type).
-const bubbles = {};          // key `${seq}-${type}` -> element
-const acc = {};              // key `${seq}-${type}` -> accumulated/current string
+let bubbles = {};          // key `${seq}-${type}` -> element
+let acc = {};              // key `${seq}-${type}` -> accumulated/current string
 
 const $ = (id) => document.getElementById(id);
 
@@ -1043,7 +1043,14 @@ $('toggleRaw').onclick = () => {
 };
 
 // ---------------- Boot ----------------
-(async () => { await loadConfig(); connectWS(); })();
+(async () => {
+  try {
+    await loadConfig();
+  } catch (err) {
+    console.error('Failed to load config:', err);
+  }
+  connectWS();
+})();
 </script>
 </body>
 </html>
