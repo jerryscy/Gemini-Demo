@@ -178,6 +178,7 @@ class LiveAPIWorker:
         # connection idle (no billable session) between recordings while the
         # browser WebSocket stays open.
         self._start_event: asyncio.Event = asyncio.Event()
+        self._start_event.set()  # Automatically connect to Live API upon startup
 
         # Set to True when stop_session() is called so run() knows not to
         # apply the error back-off delay before the next wait.
@@ -434,18 +435,29 @@ class LiveAPIWorker:
                            source_code: Optional[str] = None,
                            target_code: Optional[str] = None,
                            source_codes: Optional[list] = None) -> None:
+        new_target_code = target_code if target_code else (extract_language_code(target) or "en")
+        new_source_codes = [c for c in source_codes if c] if source_codes else (
+            [c.strip() for c in source_code.split(",") if c.strip()] if source_code else [extract_language_code(source)]
+        )
+        if not new_source_codes:
+            new_source_codes = ["zh-Hans"]
+
+        # Check if languages actually changed
+        changed = (
+            self.target_language_code != new_target_code or
+            self.source_language_codes != new_source_codes or
+            self.source_language != source or
+            self.target_language != target
+        )
+
         self.source_language = source
         self.target_language = target
-        if target_code:
-            self.target_language_code = target_code
-        else:
-            self.target_language_code = extract_language_code(target) or "en"
-        if source_codes:
-            self.source_language_codes = [c for c in source_codes if c]
-        elif source_code:
-            self.source_language_codes = [c.strip() for c in source_code.split(",") if c.strip()]
-        if self.source_language_codes:
-            self.source_language_code = self.source_language_codes[0]
+        self.target_language_code = new_target_code
+        self.source_language_codes = new_source_codes
+        self.source_language_code = self.source_language_codes[0]
+
+        if not changed:
+            return
 
         self.system_instruction = build_system_instruction(source, target)
         self.config = self._build_config()
@@ -456,18 +468,10 @@ class LiveAPIWorker:
         )
 
         if self.session is not None:
-            # The transcription language codes are part of the session config
-            # and cannot be changed mid-session. To make the new languages take
-            # effect immediately we recycle the current session: signal the
-            # run() loop to tear down the existing connection and reconnect
-            # right away with the freshly-built LiveConnectConfig.
-            if self._paused:
-                print("Closing idle Live API session to apply new languages on next start...")
-                self._intentional_stop = True
-                self._start_event.clear()
-            else:
-                print("Restarting Live API session to apply new language codes...")
-                self._restart_requested = True
+            print("Restarting Live API session to apply new language codes...")
+            self._restart_requested = True
+            self._intentional_stop = False
+            self._start_event.set()
             if self._active_receiver and not self._active_receiver.done():
                 self._active_receiver.cancel()
 
